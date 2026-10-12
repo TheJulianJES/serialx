@@ -18,6 +18,7 @@ from .common import (
     SerialException,
     StopBits,
     get_uri_handler,
+    redact_uri,
     route_backend_kwargs,
 )
 
@@ -128,7 +129,8 @@ class AsyncSerial:
 
     def __repr__(self) -> str:
         """Return a debug representation."""
-        return f"<AsyncSerial url={self._url!r} transport={self._transport!r}>"
+        url = None if self._url is None else redact_uri(self._url)
+        return f"<AsyncSerial url={url!r} transport={self._transport!r}>"
 
     # ---- Reads ----
 

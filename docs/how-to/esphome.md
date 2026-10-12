@@ -37,6 +37,12 @@ if __name__ == "__main__":
 
 Use `password=` instead of `noise_psk=` in the query string if the device uses legacy API password authentication. If the device does not use any authentication, you can omit this keyword argument.
 
+A URL can carry the `key`, `noise_psk` or `password` in its query string. Pass it through `serialx.redact_uri()` before you log it or put it in an error message:
+
+```python
+_LOGGER.info("Connected to %s", serialx.redact_uri(url))
+```
+
 ## Proxy modes
 A serial proxy streams an opaque byte stream by default. A port configured with a protocol-aware tap can instead be switched into `mode=protocol`, letting the device handle that protocol's timing-sensitive work on your behalf. It is still presented locally as a plain serial port:
 

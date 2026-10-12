@@ -41,6 +41,7 @@ from serialx import (
     async_list_serial_ports,
     async_serial_for_url,
     list_serial_ports,
+    redact_uri,
 )
 from serialx.platforms.serial_esphome import (
     ESPHOME_DEFAULT_PORT,
@@ -818,6 +819,19 @@ async def test_invalid_mode_in_url() -> None:
                 pass
 
     assert len(api.mock_calls) == 0
+
+
+@pytest.mark.parametrize(
+    "url", ["esphome:///?key=c2VjcmV0", "esphome://?key=c2VjcmV0&port_name=uart"]
+)
+async def test_missing_hostname_error_redacts_key(url: str) -> None:
+    """The missing-hostname error shows the URI as typed, without the key."""
+    with pytest.raises(InvalidSettingsError, match="is missing a hostname") as exc:
+        async with async_serial_for_url(url=url, baudrate=115200):
+            pass
+
+    assert "c2VjcmV0" not in str(exc.value)
+    assert redact_uri(url) in str(exc.value)
 
 
 def test_invalid_mode_kwarg() -> None:

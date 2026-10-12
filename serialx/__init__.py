@@ -23,6 +23,7 @@ from .common import (
     async_list_serial_ports,
     get_serial_classes,
     list_serial_ports,
+    redact_uri,
     register_uri_handler,
     serial_for_url,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "async_list_serial_ports",
     "open_serial_connection",
     "register_uri_handler",
+    "redact_uri",
     "serial_for_url",
     "udev_serial_by_id_stem",
     "ModemPins",

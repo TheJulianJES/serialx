@@ -70,6 +70,7 @@ from serialx.common import (
     PortSettingsUpdate,
     SerialPortInfo,
     StopBits,
+    redact_uri,
     register_uri_handler,
 )
 from serialx.udev import udev_serial_by_id_stem
@@ -607,7 +608,9 @@ class ESPHomeSerial(BaseSerial):
                 self._noise_psk = params["key"][0]
 
             if parsed.hostname is None:
-                raise InvalidSettingsError(f"URI {self._path!r} is missing a hostname")
+                raise InvalidSettingsError(
+                    f"URI {redact_uri(str(self._path))!r} is missing a hostname"
+                )
 
             self._api = APIClient(
                 address=parsed.hostname,

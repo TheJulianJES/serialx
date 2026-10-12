@@ -23,6 +23,14 @@ async def test_repr_unopened() -> None:
     assert "transport=None" in text
 
 
+async def test_repr_redacts_secrets() -> None:
+    """repr() does not include secret query parameters from the URL."""
+    serial = async_serial_for_url("esphome://host/?key=c2VjcmV0", baudrate=115200)
+    text = repr(serial)
+    assert "c2VjcmV0" not in text
+    assert "url='esphome://host/?key=REDACTED'" in text
+
+
 async def test_async_with_opens_and_closes(serial_pair: SerialPair) -> None:
     """`async with` opens on enter and closes on exit."""
     serial = async_serial_for_url(serial_pair.left, baudrate=115200)

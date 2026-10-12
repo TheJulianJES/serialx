@@ -16,6 +16,7 @@ from serialx import (
     async_list_serial_ports,
     get_serial_classes,
     list_serial_ports,
+    redact_uri,
     register_uri_handler,
 )
 from serialx.common import (
@@ -134,6 +135,36 @@ def test_register_uri_handler_dispatch_and_unregister() -> None:
 
     with pytest.raises(UnknownUriScheme):
         get_uri_handler("test-shared-2://")
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected"),
+    [
+        ("/dev/ttyUSB0", "/dev/ttyUSB0"),
+        ("socket://192.168.1.2:4000", "socket://192.168.1.2:4000"),
+        (
+            "esphome://host:6053/?port_name=RS%20232&key=c2VjcmV0",
+            "esphome://host:6053/?port_name=RS%20232&key=REDACTED",
+        ),
+        (
+            "esphome://host/?noise_psk=abc%3D&password=hunter2&mode=rs485",
+            "esphome://host/?noise_psk=REDACTED&password=REDACTED&mode=rs485",
+        ),
+        ("esphome://host/?key", "esphome://host/?key=REDACTED"),
+        ("esphome:///?key=c2VjcmV0", "esphome:///?key=REDACTED"),
+        (
+            "esphome://?key=c2VjcmV0&port_name=uart",
+            "esphome://?key=REDACTED&port_name=uart",
+        ),
+        ("esphome://host/?k%65y=c2VjcmV0", "esphome://host/?k%65y=REDACTED"),
+        ("esphome://host/?k\ney=c2VjcmV0", "esphome://host/?k\ney=REDACTED"),
+        ("esphome://host/?key=c2VjcmV0#frag", "esphome://host/?key=REDACTED#frag"),
+        ("esphome://[::1/?key=c2VjcmV0", "esphome://[::1/?key=REDACTED"),
+    ],
+)
+def test_redact_uri(uri: str, expected: str) -> None:
+    """Secret query parameters are redacted and other parameters are kept as-is."""
+    assert redact_uri(uri) == expected
 
 
 def test_backend_connect_kwargs_match_typed_dict() -> None:

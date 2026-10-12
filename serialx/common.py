@@ -178,6 +178,31 @@ def get_uri_handler(uri: str) -> RegisteredUriHandler:
     return handlers[-1].handler
 
 
+SECRET_URI_PARAMS = frozenset({"key", "password", "noise_psk"})
+
+
+def redact_uri(uri: str) -> str:
+    """Return the URI with secret query parameter values replaced, for logging."""
+    # Find the query like `urlsplit()` does but leave the rest of the URI as typed
+    rest, hash_sign, fragment = uri.partition("#")
+    base, _, query = rest.partition("?")
+    if not query:
+        return uri
+
+    # Split the raw query so that the other parameters keep their original encoding
+    pairs = []
+    for pair in query.split("&"):
+        name = pair.partition("=")[0]
+        # `urlsplit()` deletes tabs and newlines before parsing
+        cleaned = name.replace("\t", "").replace("\r", "").replace("\n", "")
+        if urllib.parse.unquote_plus(cleaned) in SECRET_URI_PARAMS:
+            pairs.append(f"{name}=REDACTED")
+        else:
+            pairs.append(pair)
+
+    return f"{base}?{'&'.join(pairs)}{hash_sign}{fragment}"
+
+
 def route_backend_kwargs(
     handler: RegisteredUriHandler, kwargs: dict[str, Any]
 ) -> dict[str, Any]:
