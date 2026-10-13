@@ -241,13 +241,30 @@ class PyodideSerialTransport(BaseSerialTransport):
                 f"Unsupported byte_size: {self._serial.byte_size!r}"
             )
 
-        await port.open(
-            baudRate=self._serial.baudrate,
-            dataBits=data_bits,
-            flowControl=flow_control,
-            parity=_PARITY_MAP[self._serial.parity],
-            stopBits=_STOPBITS_MAP[self._serial.stopbits],
+        # `port.open()` cannot be cancelled, so if we are cancelled or closed while it
+        # is pending, wait for it to finish and close the port again
+        opening = asyncio.ensure_future(
+            port.open(
+                baudRate=self._serial.baudrate,
+                dataBits=data_bits,
+                flowControl=flow_control,
+                parity=_PARITY_MAP[self._serial.parity],
+                stopBits=_STOPBITS_MAP[self._serial.stopbits],
+            )
         )
+
+        try:
+            await asyncio.shield(opening)
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await opening
+                await port.close()
+            raise
+
+        if self._closing:
+            with contextlib.suppress(Exception):
+                await port.close()
+            raise SerialException("Serial port was closed while opening")
 
         # Only an opened port can be closed: `close()` rejects otherwise
         self._js_port = port
@@ -256,6 +273,10 @@ class PyodideSerialTransport(BaseSerialTransport):
             rts=self._serial.rts_on_open,
             dtr=self._serial.dtr_on_open,
         )
+
+        if self._closing:
+            # `_cleanup()` already saw the port and is closing it
+            raise SerialException("Serial port was closed while opening")
 
         readable = self._js_port.readable
         assert readable is not None
