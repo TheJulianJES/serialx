@@ -149,7 +149,8 @@ class DataProtocol(asyncio.Protocol):
         self.lost.set_result(exc)
 
 
-async def test_async_close_stops_reading_while_draining() -> None:
+@pytest.mark.parametrize("write_eof", [False, True])
+async def test_async_close_stops_reading_while_draining(write_eof: bool) -> None:
     """No data is received after `close()`, even while the write buffer drains."""
     master, slave = os.openpty()
     os.set_blocking(master, False)
@@ -163,6 +164,9 @@ async def test_async_close_stops_reading_while_draining() -> None:
         # Nothing reads the PTY master, so this stays in the write buffer
         transport.write(b"x" * 200_000)
         assert transport.get_write_buffer_size() > 0
+
+        if write_eof:
+            transport.write_eof()
 
         transport.close()
         os.write(master, b"after close")

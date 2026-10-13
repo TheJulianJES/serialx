@@ -359,6 +359,11 @@ class DescriptorTransport(BaseSerialTransport):
         self._mark_user_closed()
         self._arm_close_timeout()
 
+        # No more data is received once closed, even while the write buffer drains or
+        # after `write_eof()`
+        if self._fileno is not None:
+            self._loop.remove_reader(self._fileno)
+
         if self._closing:
             if (
                 self._fileno is None
@@ -369,8 +374,6 @@ class DescriptorTransport(BaseSerialTransport):
             return
 
         if self._fileno is not None:
-            # No more data is received once closed, even while the write buffer drains
-            self._loop.remove_reader(self._fileno)
             self.write_eof()
         else:
             # The fd hasn't been opened yet. Just set the flag; _open() will
