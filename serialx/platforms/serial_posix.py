@@ -530,6 +530,10 @@ class PosixSerialTransport(DescriptorTransport):
         normalized_path = str(path)
         await super()._open(normalized_path)
 
+        # Read timing is set by the transport below, not by the caller
+        kwargs.pop("min_read_size", None)
+        kwargs.pop("inter_byte_timeout", None)
+
         self._serial = self._serial_cls(
             **kwargs,
             path=normalized_path,

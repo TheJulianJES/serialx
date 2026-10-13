@@ -8,12 +8,15 @@ if sys.platform in ("win32", "emscripten"):
     pytest.skip("POSIX-only tests", allow_module_level=True)
 
 import array
+import asyncio
 import errno
+import os
 import termios
+import tty
 from typing import Any
 from unittest.mock import patch
 
-from serialx import ModemPins, PinState
+from serialx import ModemPins, PinState, create_serial_connection
 from serialx.platforms.serial_posix import PosixSerial
 
 
@@ -127,3 +130,30 @@ def test_termios_error_raised_as_os_error_bad_descriptor() -> None:
 
     assert raised.value.errno is not None
     assert raised.value.strerror is not None
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"inter_byte_timeout": None}, {"inter_byte_timeout": 1.0}, {"min_read_size": 5}],
+)
+async def test_async_read_timing_kwargs_overridden(kwargs: dict[str, Any]) -> None:
+    """The async transport accepts and overrides the caller's read timing kwargs."""
+    master, slave = os.openpty()
+    tty.setraw(master)
+    loop = asyncio.get_running_loop()
+
+    try:
+        transport, _ = await create_serial_connection(
+            loop, asyncio.Protocol, os.ttyname(slave), baudrate=115200, **kwargs
+        )
+
+        # The transport's own read timing is used, not the caller's
+        cc = termios.tcgetattr(transport.serial.fileno())[6]
+        assert cc[termios.VTIME] == 0
+        assert cc[termios.VMIN] != 5
+
+        transport.close()
+        await asyncio.wait_for(transport.wait_closed(), timeout=2.0)
+    finally:
+        os.close(master)
+        os.close(slave)
