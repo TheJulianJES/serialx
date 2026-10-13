@@ -6,6 +6,9 @@ updates:
       interval: monthly
     # Only update `uv.lock`, never the minimum versions in `pyproject.toml`
     versioning-strategy: lockfile-only
+    # Also update transitive dependencies in `uv.lock`, not only direct ones
+    allow:
+      - dependency-type: "all"
     cooldown:
       default-days: 7
     groups:
