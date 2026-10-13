@@ -416,12 +416,6 @@ class PyodideSerialTransport(BaseSerialTransport):
             await self._js_port.close()
             self._js_port = None
 
-        assert self._close_port_task is not None
-
-        # If the task cannot be removed, we should still call `connection_lost`
-        with contextlib.suppress(ValueError):
-            _SERIAL_PORT_CLOSING_TASKS.add(self._close_port_task)
-
         # Only now do we call `connection_lost`
         self._call_protocol_connection_lost(exception)
 
@@ -439,7 +433,9 @@ class PyodideSerialTransport(BaseSerialTransport):
 
         if self._js_port is not None and self._close_port_task is None:
             self._close_port_task = asyncio.create_task(self._close_port(exception))
-            _SERIAL_PORT_CLOSING_TASKS.discard(self._close_port_task)
+            # Keep a reference until the task is done so it isn't garbage collected
+            _SERIAL_PORT_CLOSING_TASKS.add(self._close_port_task)
+            self._close_port_task.add_done_callback(_SERIAL_PORT_CLOSING_TASKS.discard)
         elif not self._closed_waiter.done():
             self._call_protocol_connection_lost(exception)
 

@@ -13,6 +13,7 @@ if sys.platform != "emscripten":
 
 from serialx import Parity, StopBits, create_serial_connection
 from serialx.common import SerialException, UnsupportedSetting
+from serialx.platforms.serial_pyodide import _SERIAL_PORT_CLOSING_TASKS
 from tests.common import create_pyodide_pair
 
 
@@ -64,3 +65,20 @@ async def test_pyodide_unregistered_port_raises() -> None:
             url="pyodide://not-registered",
             baudrate=115200,
         )
+
+
+async def test_pyodide_close_task_tracked_until_done() -> None:
+    """The background close task is referenced while running and released after."""
+    with create_pyodide_pair() as (left, _):
+        transport, _ = await create_serial_connection(
+            asyncio.get_running_loop(), asyncio.Protocol, url=left, baudrate=115200
+        )
+        transport.close()
+
+        close_task = transport._close_port_task
+        assert close_task is not None
+        assert close_task in _SERIAL_PORT_CLOSING_TASKS
+
+        await asyncio.wait_for(close_task, 1)
+        await asyncio.sleep(0)
+        assert close_task not in _SERIAL_PORT_CLOSING_TASKS
