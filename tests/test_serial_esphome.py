@@ -924,6 +924,23 @@ def test_invalid_mode_kwarg() -> None:
         ESPHomeSerial(port_name="Zigbee", mode="zigbee", baudrate=115200)
 
 
+async def test_sync_external_api_is_open() -> None:
+    """With an externally passed API, the port is open only between open and close."""
+    api = mock_api_client("Zigbee")
+    serial = ESPHomeSerial(api=api, port_name="Zigbee", baudrate=115200)
+    assert not serial.is_open
+
+    def _open_close() -> None:
+        with serial:
+            assert serial.is_open
+
+    # The sync API runs its calls on the API client's loop, which is this one
+    await asyncio.to_thread(_open_close)
+
+    assert not serial.is_open
+    assert call.subscribe_serial_proxy_data(ANY) in api.mock_calls
+
+
 def _identity(**overrides: object) -> SerialProxyIdentity:
     fields = {
         "instance": 0,

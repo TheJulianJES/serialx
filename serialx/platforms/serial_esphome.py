@@ -559,7 +559,9 @@ class ESPHomeSerial(BaseSerial):
     @property
     def is_open(self) -> bool:
         """Return whether the serial port is open."""
-        return self._api is not None
+        # An externally passed API is connected before `open()` and after `close()`,
+        # so the data handler that `_open` installs is what marks the port as open
+        return self._api is not None and self._unsub is not None
 
     @translate_esphome_errors
     async def _async_open(self) -> None:
