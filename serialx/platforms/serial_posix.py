@@ -57,9 +57,10 @@ MODEM_BIT_MAPPING = {
 }
 assert MODEM_BIT_MAPPING.keys() == ModemPins.__annotations__.keys()
 
-# Devices without modem control lines (e.g. ptys) reject the `TIOCM*` ioctls with
-# `ENOTTY`, or `EINVAL` on some older kernels. pyserial ignores both on open too.
-MODEM_PINS_UNSUPPORTED_ERRNOS = (errno.ENOTTY, errno.EINVAL)
+# Devices without modem control lines reject the `TIOCM*` ioctls: ptys and drivers
+# without `tiocm*` with `ENOTTY`, or `EINVAL` on Linux before 5.15 (incl. 5.10 LTS),
+# and cdc-acm devices without control line support with `EOPNOTSUPP`
+MODEM_PINS_UNSUPPORTED_ERRNOS = (errno.ENOTTY, errno.EINVAL, errno.EOPNOTSUPP)
 
 
 class TcsetattrFlags(NamedTuple):

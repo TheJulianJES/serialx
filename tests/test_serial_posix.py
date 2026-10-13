@@ -119,7 +119,7 @@ def test_partial_set_modem_pins_uses_native_int_ioctl_buffer() -> None:
     assert seen_requests == [termios.TIOCMBIS, termios.TIOCMBIC]
 
 
-@pytest.mark.parametrize("err", [errno.ENOTTY, errno.EINVAL])
+@pytest.mark.parametrize("err", [errno.ENOTTY, errno.EINVAL, errno.EOPNOTSUPP])
 def test_modem_pins_unsupported_ignored(err: int) -> None:
     """Devices without modem control lines report no modem pins."""
 
