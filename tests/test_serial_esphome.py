@@ -918,6 +918,34 @@ async def test_missing_hostname_error_redacts_key(url: str) -> None:
     assert redact_uri(url) in str(exc.value)
 
 
+@pytest.mark.parametrize("name", ["key", "noise_psk"])
+@pytest.mark.parametrize("encode", [False, True])
+async def test_key_with_plus_in_url(name: str, encode: bool) -> None:
+    """A `+` in a base64 key reaches the client as typed, percent-encoded or not."""
+    api = mock_api_client("Zigbee")
+    key = "px2Ttb+OzAX/jdXVJrKz5ZHU+aJ95GTN0FQMs16RMS0="
+    value = urllib.parse.quote(key, safe="") if encode else key
+    url = f"esphome://127.0.0.1:6053/?port_name=Zigbee&{name}={value}"
+
+    with patch(
+        "serialx.platforms.serial_esphome.APIClient", return_value=api
+    ) as api_client:
+        async with async_serial_for_url(url=url, baudrate=115200):
+            pass
+
+    assert api_client.mock_calls == [
+        call(
+            address="127.0.0.1",
+            port=6053,
+            password=None,
+            noise_psk=key,
+            provide_time=False,
+        )
+    ]
+    assert key not in redact_uri(url)
+    assert value not in redact_uri(url)
+
+
 def test_invalid_mode_kwarg() -> None:
     """An unknown `mode` kwarg is rejected immediately."""
     with pytest.raises(InvalidSettingsError, match="Invalid serial proxy mode"):

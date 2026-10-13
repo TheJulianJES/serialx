@@ -605,10 +605,12 @@ class ESPHomeSerial(BaseSerial):
 
             if "noise_psk" in params and "key" in params:
                 raise ValueError("Both `key` and `noise_psk` cannot be provided")
-            elif "noise_psk" in params:
-                self._noise_psk = params["noise_psk"][0]
-            elif "key" in params:
-                self._noise_psk = params["key"][0]
+
+            # A base64 key never contains spaces, but often a `+`, which `parse_qs()`
+            # decodes into a space unless it was percent-encoded
+            for name in ("noise_psk", "key"):
+                if name in params:
+                    self._noise_psk = params[name][0].replace(" ", "+")
 
             if parsed.hostname is None:
                 raise InvalidSettingsError(
