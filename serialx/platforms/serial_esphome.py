@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine
+import concurrent.futures
 from contextlib import suppress
 import dataclasses
 from enum import Enum, IntFlag
@@ -1098,7 +1099,8 @@ class ESPHomeSerial(BaseSerial):
         """Read bytes from serial port into buffer."""
         try:
             return self._call_on_loop(self._async_readinto(b, timeout))
-        except TimeoutError:
+        except (TimeoutError, concurrent.futures.CancelledError):
+            # Cancelled by a `close()` from another thread
             return 0
 
     async def _async_readinto(self, b: Buffer, timeout: float | None) -> int:
@@ -1141,8 +1143,26 @@ class ESPHomeSerial(BaseSerial):
             await self._call_on_client_loop(self._api.disconnect())
             self._api = None
 
+    @staticmethod
+    async def _async_cancel_pending() -> None:
+        """Cancel every other task on the running loop and wait for them to finish."""
+        current = asyncio.current_task()
+        tasks = [task for task in asyncio.all_tasks() if task is not current]
+
+        for task in tasks:
+            task.cancel()
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+
     def _close(self) -> None:
         """Close the serial port."""
+        # The loop thread can neither wait for its own loop nor join itself
+        if self._loop_thread is threading.current_thread():
+            raise RuntimeError(
+                "Cannot call this sync ESPHomeSerial method from its own event "
+                "loop thread; use the async API instead."
+            )
+
         self._unsubscribe_callbacks()
 
         if self._disconnect_api and self._api is not None:
@@ -1152,6 +1172,14 @@ class ESPHomeSerial(BaseSerial):
 
         if self._loop_thread is not None:
             assert self._loop is not None
+
+            # A read blocked in another thread would otherwise wait forever on the
+            # stopped loop. Not `_call_on_loop`: this never touches the client's loop,
+            # so it is safe from that loop too, where `_call_on_loop` refuses to run.
+            asyncio.run_coroutine_threadsafe(
+                self._async_cancel_pending(), self._loop
+            ).result()
+
             self._loop.call_soon_threadsafe(self._loop.stop)
             self._loop_thread.join()
             self._loop.close()

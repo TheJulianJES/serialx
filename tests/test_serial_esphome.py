@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 import contextlib
 import errno
 import threading
+import time
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 import urllib.parse
 import warnings
@@ -45,6 +46,7 @@ from serialx import (
     create_serial_connection,
     list_serial_ports,
     redact_uri,
+    serial_for_url,
 )
 from serialx.platforms.serial_esphome import (
     ESPHOME_DEFAULT_PORT,
@@ -1600,3 +1602,78 @@ async def test_no_serial_number_skips_the_check() -> None:
             pass
 
     assert len(api.serial_proxy_get_identity.mock_calls) == 0
+
+
+def test_sync_close_wakes_blocked_reader() -> None:
+    """A read blocked in another thread returns once the port is closed."""
+
+    def create_api(**kwargs: object) -> MagicMock:
+        # Created on the background loop, which the real client binds itself to
+        return mock_api_client("Zigbee")
+
+    with patch("serialx.platforms.serial_esphome.APIClient", side_effect=create_api):
+        serial = serial_for_url(
+            "esphome://127.0.0.1:6053/?port_name=Zigbee", baudrate=115200, timeout=None
+        )
+        serial.open()
+
+    assert isinstance(serial, ESPHomeSerial)
+    loop = serial._loop
+    assert loop is not None
+
+    result: list[bytes | BaseException] = []
+
+    def reader() -> None:
+        try:
+            result.append(serial.read(10))
+        except BaseException as exc:  # noqa: BLE001
+            result.append(exc)
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+
+    async def pending_tasks() -> int:
+        return len(asyncio.all_tasks()) - 1
+
+    # Wait for the read to be waiting for data on the loop
+    while not asyncio.run_coroutine_threadsafe(pending_tasks(), loop).result():
+        time.sleep(0.01)
+
+    serial.close()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert result == [b""]
+
+
+def test_sync_close_on_loop_thread_raises() -> None:
+    """Closing from the serial's own loop thread raises instead of deadlocking."""
+    api_loop = asyncio.new_event_loop()
+    api_thread = threading.Thread(target=api_loop.run_forever, daemon=True)
+    api_thread.start()
+
+    async def create_api() -> MagicMock:
+        return mock_api_client("Zigbee")
+
+    # With a shared client nothing is disconnected, so the close reaches the loop
+    api = asyncio.run_coroutine_threadsafe(create_api(), api_loop).result()
+    serial = ESPHomeSerial(api=api, port_name="Zigbee", baudrate=115200)
+    serial.open()
+
+    async def close_on_loop() -> None:
+        serial.close()
+
+    try:
+        assert serial._loop is not None
+        with pytest.raises(RuntimeError, match="sync ESPHomeSerial method"):
+            asyncio.run_coroutine_threadsafe(close_on_loop(), serial._loop).result(
+                timeout=5
+            )
+
+        # Nothing was torn down, so a close from elsewhere still works
+        serial.close()
+        assert serial._loop_thread is None
+    finally:
+        api_loop.call_soon_threadsafe(api_loop.stop)
+        api_thread.join(timeout=5)
+        api_loop.close()
