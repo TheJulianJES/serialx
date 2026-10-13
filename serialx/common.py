@@ -768,6 +768,16 @@ class BaseSerial(io.RawIOBase):
 
     @write_timeout.setter
     def write_timeout(self, value: float | None) -> None:
+        if value is not None:
+            # Same checks as pyserial
+            try:
+                value + 1
+            except TypeError:
+                raise ValueError(f"Not a valid timeout: {value!r}") from None
+
+            if value < 0:
+                raise ValueError(f"Not a valid timeout: {value!r}")
+
         self._write_timeout = value
 
     @property
@@ -1238,7 +1248,7 @@ class BaseSerial(io.RawIOBase):
 
     @writeTimeout.setter
     def writeTimeout(self, value: float | None) -> None:
-        self._write_timeout = value
+        self.write_timeout = value
 
     def reset_input_buffer(self) -> None:
         """Reset the read buffer.

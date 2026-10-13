@@ -200,6 +200,16 @@ def test_compat_write_timeout_setter() -> None:
     s.writeTimeout = 1.5
     assert s.write_timeout == 1.5
 
+    # Validated like in pyserial
+    for invalid in (-1, "1"):
+        with pytest.raises(ValueError, match="Not a valid timeout"):
+            s.write_timeout = invalid  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="Not a valid timeout"):
+            s.writeTimeout = invalid  # type: ignore[assignment]
+
+    assert s.write_timeout == 1.5
+
 
 def test_compat_port_setter(serial_pair: SerialPair) -> None:
     """Setting `port` changes the port that `open()` uses, reopening an open port."""
