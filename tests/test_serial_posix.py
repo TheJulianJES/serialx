@@ -12,6 +12,7 @@ import errno
 import os
 import resource
 import termios
+import time
 import tty
 from typing import Any
 from unittest.mock import patch
@@ -146,16 +147,35 @@ def test_read_write_fd_above_fd_setsize() -> None:
     try:
         tty.setraw(slave)
         os.dup2(slave, high_fd)
-        serial = PosixSerial(fileno=high_fd, read_timeout=0.1)
 
-        os.write(master, b"in")
-        assert serial.readexactly(2) == b"in"
-        assert serial.read(1) == b""
+        try:
+            serial = PosixSerial(fileno=high_fd, read_timeout=0.1)
 
-        serial.write(b"out")
-        assert os.read(master, 3) == b"out"
+            os.write(master, b"in")
+            assert serial.readexactly(2) == b"in"
+            assert serial.read(1) == b""
+
+            serial.write(b"out")
+            assert os.read(master, 3) == b"out"
+        finally:
+            os.close(high_fd)
     finally:
-        os.close(high_fd)
         os.close(master)
         os.close(slave)
         resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+
+
+@pytest.mark.parametrize("timeout", [-1.0, -0.0001])
+def test_read_negative_timeout_does_not_block(timeout: float) -> None:
+    """A negative timeout, e.g. an overrun deadline, polls instead of blocking."""
+    master, slave = os.openpty()
+
+    try:
+        serial = PosixSerial(fileno=slave)
+
+        start = time.monotonic()
+        assert serial.readinto(bytearray(1), timeout=timeout) == 0
+        assert time.monotonic() - start < 1.0
+    finally:
+        os.close(master)
+        os.close(slave)

@@ -44,6 +44,8 @@ FLUSH_TIMEOUT = 10.0
 # be read.
 AFTER_OPEN_DELAY = 0.01
 
+POLL_MAX_TIMEOUT_MS = 2**31 - 1
+
 MODEM_BIT_MAPPING = {
     "le": termios.TIOCM_LE,
     "dtr": termios.TIOCM_DTR,
@@ -76,7 +78,13 @@ def wait_for_fd(fd: int, events: int, timeout: float | None) -> bool:
     poller = select.poll()
     poller.register(fd, events)
 
-    return bool(poller.poll(None if timeout is None else timeout * 1000))
+    if timeout is None:
+        return bool(poller.poll(None))
+
+    # `poll` treats negative timeouts as infinite and only accepts a C `int`
+    timeout_ms = min(max(timeout, 0) * 1000, POLL_MAX_TIMEOUT_MS)
+
+    return bool(poller.poll(timeout_ms))
 
 
 def modem_pins_mask_of_value(modem_pins: ModemPins, mask: PinState) -> int:
