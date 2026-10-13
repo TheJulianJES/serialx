@@ -236,8 +236,10 @@ class Rfc2217AckWaiter:
     cmd: Rfc2217Command
     ack: Rfc2217Command | None = None
     abandoned: bool = False
-    # An ack of this type was discarded as late while this request was queued
-    passed_late_ack: bool = False
+
+
+# Commands whose acks echo the requested value
+_ECHOED_ACK_CMD_IDS = frozenset({Rfc2217CmdId.SET_CONTROL, Rfc2217CmdId.PURGE_DATA})
 
 
 class Rfc2217:
@@ -298,18 +300,9 @@ class Rfc2217:
 
     def abandon_ack(self, waiter: Rfc2217AckWaiter) -> None:
         """Stop waiting for the ack of a request."""
-        waiters = self._ack_waiters.get(waiter.cmd.CMD_ID)
-        if waiters is None or waiter not in waiters:
-            return
-
-        if waiter.passed_late_ack:
-            # The ack discarded as late while it waited was most likely its own,
-            # the request ahead of it having never been acked
-            waiters.remove(waiter)
-        else:
-            # Keep it queued: its ack may still arrive and must not be mistaken
-            # for the ack of a later request of the same type
-            waiter.abandoned = True
+        # Keep it queued: its ack may still arrive and must not be mistaken for
+        # the ack of a later request of the same type
+        waiter.abandoned = True
 
     def _resolve_ack(self, ack: Rfc2217Command) -> None:
         """Hand an ack to the oldest request of its type."""
@@ -326,10 +319,6 @@ class Rfc2217:
         waiter = waiters.popleft()
         if waiter.abandoned:
             LOGGER.debug("Discarding late ack %r", ack)
-
-            for queued in waiters:
-                queued.passed_late_ack = True
-
             return
 
         waiter.ack = ack
@@ -337,8 +326,12 @@ class Rfc2217:
     @staticmethod
     def _num_lost_acks(waiters: deque[Rfc2217AckWaiter], ack: Rfc2217Command) -> int:
         """Count the abandoned requests at the head of the queue that weren't acked."""
-        # Servers echo the requested value, so an ack that doesn't match abandoned
-        # requests but does match one right behind them means theirs never came
+        # Servers echo the requested value of these, so an ack that doesn't match
+        # abandoned requests but does match one right behind them means theirs never
+        # came. Acks of the other commands report the value actually in effect.
+        if ack.CMD_ID not in _ECHOED_ACK_CMD_IDS:
+            return 0
+
         for i, waiter in enumerate(waiters):
             if waiter.cmd == ack:
                 return i

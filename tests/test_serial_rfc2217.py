@@ -2,7 +2,6 @@
 
 import asyncio
 from collections.abc import Callable, Iterator
-import contextlib
 import sys
 import threading
 import time
@@ -396,52 +395,41 @@ async def test_async_lost_ack_only_fails_its_command(
     await transport.wait_closed()
 
 
-def test_sync_lost_ack_of_repeated_command_recovers(
+async def test_async_ack_with_actual_value_not_matched_to_later_request(
     fake_rfc2217_server: FakeRfc2217Server,
 ) -> None:
-    """A lost ack of a command that is repeated identically doesn't stick."""
-    with Serial.from_url(
-        fake_rfc2217_server.url,
-        baudrate=115200,
-        read_timeout=0.3,
-        write_timeout=0.3,
-        connect_timeout=0.3,
-    ) as serial:
-        fake_rfc2217_server.drop_acks(Rfc2217CmdId.SET_BAUDRATE)
-
-        with pytest.raises(TimeoutError):
-            serial.flush()
-
-        # Its ack is indistinguishable from a late ack of the first flush
-        with contextlib.suppress(TimeoutError):
-            serial.flush()
-
-        serial.flush()
-        serial.flush()
-
-
-async def test_async_lost_ack_of_repeated_command_recovers(
-    fake_rfc2217_server: FakeRfc2217Server,
-) -> None:
-    """A lost ack of a command that is repeated identically doesn't stick."""
+    """A late ack reporting the value in effect isn't taken for a later request."""
     transport, _ = await create_serial_connection(
         asyncio.get_running_loop(),
         asyncio.Protocol,
         url=fake_rfc2217_server.url,
         baudrate=115200,
     )
+    assert isinstance(transport, RFC2217SerialTransport)
 
-    fake_rfc2217_server.drop_acks(Rfc2217CmdId.SET_BAUDRATE)
+    fake_rfc2217_server.unacked_cmd_ids = {Rfc2217CmdId.SET_BAUDRATE}
 
     with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(transport.flush(), 0.3)
+        await asyncio.wait_for(
+            transport._send_and_wait(SetBaudrateCmd(baudrate=1200)), 0.1
+        )
 
-    # Its ack is indistinguishable from a late ack of the first flush
-    with contextlib.suppress(asyncio.TimeoutError):
-        await asyncio.wait_for(transport.flush(), 0.3)
+    command = asyncio.create_task(
+        transport._send_and_wait(SetBaudrateCmd(baudrate=2400))
+    )
+    await asyncio.sleep(0.1)
 
-    await asyncio.wait_for(transport.flush(), 2)
-    await asyncio.wait_for(transport.flush(), 2)
+    # The server picked 2400 for the first request and acks with the actual rate
+    fake_rfc2217_server.send_ack(
+        Rfc2217CmdId.SET_BAUDRATE, SetBaudrateCmd(baudrate=2400).to_bytes()
+    )
+    await asyncio.sleep(0.1)
+    assert not command.done()
+
+    fake_rfc2217_server.send_ack(
+        Rfc2217CmdId.SET_BAUDRATE, SetBaudrateCmd(baudrate=2400).to_bytes()
+    )
+    await asyncio.wait_for(command, 2)
 
     transport.close()
     await transport.wait_closed()
