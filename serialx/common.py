@@ -646,6 +646,10 @@ class BaseSerial(io.RawIOBase):
         """Open the serial port (platform-specific)."""
         raise NotImplementedError
 
+    def _set_path(self, path: str | Path | None) -> None:
+        """Change the path the next `open()` uses."""
+        self._path = path
+
     def _all_settings(self) -> PortSettingsUpdate:
         return PortSettingsUpdate(
             baudrate=self._baudrate,
@@ -1116,18 +1120,20 @@ class BaseSerial(io.RawIOBase):
 
     @port.setter
     def port(self, value: str | Path | None) -> None:
-        """Set the path of a closed port (deprecated)."""
-        if self.is_open:
-            raise SerialException(
-                "Cannot change the path of an open port, close it first"
-            )
-
+        """Set the path, reopening the port if it is open (deprecated)."""
         warnings.warn(
             "Setting `port` is deprecated, pass `path` to the constructor instead",
             DeprecationWarning,
             stacklevel=2,
         )
-        self._path = value
+
+        was_open = self.is_open
+        self._set_path(value)
+
+        # Like pyserial, an open port is reopened with the new path
+        if was_open:
+            self.close()
+            self.open()
 
     @property
     def portstr(self) -> str | None:

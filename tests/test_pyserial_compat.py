@@ -35,7 +35,7 @@ from serialx import (
 from serialx.common import PortSettingsUpdate
 from serialx.tools.list_ports import comports, grep
 from serialx.tools.list_ports_common import ListPortInfo
-from tests.common import SerialPair
+from tests.common import SerialBackend, SerialPair
 
 
 def test_compat_constructor_kwargs(serial_pair: SerialPair) -> None:
@@ -202,12 +202,23 @@ def test_compat_write_timeout_setter() -> None:
 
 
 def test_compat_port_setter(serial_pair: SerialPair) -> None:
-    """Setting `port` on a closed port changes the port that `open()` uses."""
+    """Setting `port` changes the port that `open()` uses, reopening an open port."""
     left_path = Serial.from_url(serial_pair.left).path
     assert left_path is not None
 
     # Created for the right port, then pointed at the left one before opening
     left = Serial.from_url(serial_pair.right, baudrate=115200)
+
+    if {SerialBackend.ESPHOME, SerialBackend.ESPHOME_HOST} & set(serial_pair.backends):
+        # Settings parsed from the URI would be kept, so the path can't change
+        with (
+            pytest.warns(DeprecationWarning, match="`port`"),
+            pytest.raises(SerialException, match="cannot be changed"),
+        ):
+            left.port = left_path
+
+        return
+
     with pytest.warns(DeprecationWarning, match="`port`"):
         left.port = left_path
 
@@ -218,8 +229,15 @@ def test_compat_port_setter(serial_pair: SerialPair) -> None:
         left.write(b"test")
         assert right.readexactly(4) == b"test"
 
-        with pytest.raises(SerialException, match="open port"):
+        # Like pyserial, an open port is closed and reopened, keeping its settings
+        with pytest.warns(DeprecationWarning, match="`port`"):
             left.port = left_path
+
+        assert left.is_open
+        assert left.baudrate == 115200
+
+        left.write(b"again")
+        assert right.readexactly(5) == b"again"
 
 
 def test_reconfigure_port_closed_raises() -> None:

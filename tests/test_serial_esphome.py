@@ -924,6 +924,29 @@ def test_invalid_mode_kwarg() -> None:
         ESPHomeSerial(port_name="Zigbee", mode="zigbee", baudrate=115200)
 
 
+async def test_sync_port_setter_is_refused() -> None:
+    """The `port` setter is refused, the old URI's port settings would be kept."""
+    api = mock_api_client("Zigbee")
+    url = "esphome://127.0.0.1:6053/?port_name=Zigbee"
+    serial = ESPHomeSerial(url, baudrate=115200)
+
+    def _open_and_set_port() -> None:
+        with serial:
+            with (
+                pytest.warns(DeprecationWarning, match="`port`"),
+                pytest.raises(SerialException, match="cannot be changed"),
+            ):
+                serial.port = "esphome://127.0.0.1:6053/?port_name=Other"
+
+            # Refused before touching the open port
+            assert serial.is_open
+            assert serial.path == url
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        # The sync API runs its calls on the API client's loop, which is this one
+        await asyncio.to_thread(_open_and_set_port)
+
+
 def _identity(**overrides: object) -> SerialProxyIdentity:
     fields = {
         "instance": 0,

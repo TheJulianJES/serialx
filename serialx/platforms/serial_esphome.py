@@ -31,6 +31,7 @@ import errno
 import functools
 import logging
 from operator import attrgetter
+from pathlib import Path
 import threading
 from typing import Any, ParamSpec, TypeVar, cast
 import urllib.parse
@@ -538,6 +539,12 @@ class ESPHomeSerial(BaseSerial):
         # one has to be opened once something is plugged back in.
         self._mark_broken(exc)
         self._read_event.set()
+
+    def _set_path(self, path: str | Path | None) -> None:
+        """Refuse, the port, mode, key and matchers parsed from the URI would be kept."""
+        raise SerialException(
+            "The path of an ESPHome serial port cannot be changed, create a new one"
+        )
 
     def _open(self) -> None:
         """Open the serial port."""

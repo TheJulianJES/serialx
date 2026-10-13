@@ -7,6 +7,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 import errno
 import logging
+from pathlib import Path
 import socket
 import sys
 from typing import Any
@@ -33,6 +34,15 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_CONNECT_TIMEOUT = 10.0
 
 
+def _parse_socket_uri(path: str | Path | None) -> tuple[str, int]:
+    """Get the host and port from a socket URI."""
+    parsed = urllib.parse.urlparse(str(path))
+    if parsed.hostname is None or parsed.port is None:
+        raise ValueError(f"Invalid socket URI, expected both host and port: {path}")
+
+    return parsed.hostname, parsed.port
+
+
 class SocketSerial(BaseSerial):
     """Synchronous serial interface over a TCP socket."""
 
@@ -46,25 +56,20 @@ class SocketSerial(BaseSerial):
         """Initialize socket serial port."""
         super().__init__(*args, **kwargs)
 
-        self._host, self._port = self._parse_path()
+        self._host, self._port = _parse_socket_uri(self._path)
         self._connect_timeout = connect_timeout
 
         self._socket: socket.socket | None = None
 
-    def _parse_path(self) -> tuple[str, int]:
-        """Get the host and port from the socket URI."""
-        parsed = urllib.parse.urlparse(str(self._path))
-        if parsed.hostname is None or parsed.port is None:
-            raise ValueError(
-                f"Invalid socket URI, expected both host and port: {self._path}"
-            )
-
-        return parsed.hostname, parsed.port
+    def _set_path(self, path: str | Path | None) -> None:
+        """Change the socket URI the next `open()` connects to."""
+        self._host, self._port = _parse_socket_uri(path)
+        super()._set_path(path)
 
     def _open(self) -> None:
         """Open the socket connection."""
-        # The path can change while the port is closed
-        self._host, self._port = self._parse_path()
+        assert self._host is not None
+        assert self._port is not None
 
         self._socket = socket.create_connection(
             (self._host, self._port), timeout=self._connect_timeout
