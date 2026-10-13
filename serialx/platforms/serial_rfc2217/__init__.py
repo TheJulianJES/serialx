@@ -736,6 +736,8 @@ class RFC2217SerialTransport(BaseSerialTransport):
         self._tcp_connection_lost_waiter: asyncio.Future[None] | None = None
         self._close_task: asyncio.Task[None] | None = None
         self._needs_flush = False
+        # Data the device sent before the protocol was told about the transport
+        self._pending_data: list[bytes] | None = []
 
     # -- connection lifecycle -----------------------------------------------
 
@@ -772,6 +774,14 @@ class RFC2217SerialTransport(BaseSerialTransport):
             await self._reconfigure_port(self._serial._all_settings())
 
         self._call_protocol_connection_made()
+
+        # The server can forward device data as soon as the TCP connection is up, while
+        # the protocol only learns of the transport once the port is configured. Replay
+        # what arrived in between so the protocol never sees data first.
+        pending_data, self._pending_data = self._pending_data, None
+        assert pending_data is not None
+        for data in pending_data:
+            self._protocol.data_received(data)
 
     async def _negotiate(self) -> None:
         """Perform the initial WILL/DO handshake for COM-PORT-OPTION."""
@@ -879,8 +889,18 @@ class RFC2217SerialTransport(BaseSerialTransport):
         for response in responses:
             self._send_command(response)
 
-        if serial_data and self._connection_made_called:
-            self._protocol.data_received(serial_data)
+        if not serial_data:
+            return
+
+        if self._pending_data is not None:
+            LOGGER.debug(
+                "Data received before connection made, buffering (%d bytes)",
+                len(serial_data),
+            )
+            self._pending_data.append(serial_data)
+            return
+
+        self._protocol.data_received(serial_data)
 
     async def _send_and_wait(self, cmd: Rfc2217Command) -> Rfc2217Command:
         """Send a command and wait for the matching server ack."""

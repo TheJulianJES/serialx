@@ -21,12 +21,14 @@ from serialx.platforms.serial_rfc2217.types import (
     ModemStateFlag,
     NotifyLinestateCmd,
     NotifyModemstateCmd,
+    Rfc2217CmdId,
     SignatureCmd,
     TelnetOption,
     WillCmd,
 )
 
 from .common import HUB4COM_BINARY, SerialBackend, SerialPair, create_hub4com_pair
+from .rfc2217_server import create_rfc2217_server
 from .socket_relay import create_accept_then_close_server, create_silent_server
 
 
@@ -110,6 +112,36 @@ async def test_async_negotiate_timeout_silent_server() -> None:
                 )
 
         assert 0.1 <= elapsed() < 1.0
+
+
+async def test_async_data_before_connection_made_is_delivered() -> None:
+    """Serial data arriving while the port is configured is delivered after connect."""
+    events: list[str | bytes] = []
+    received = asyncio.Event()
+
+    class Protocol(asyncio.Protocol):
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            events.append("connection_made")
+
+        def data_received(self, data: bytes) -> None:
+            events.append(data)
+            if b"".join(e for e in events if isinstance(e, bytes)) == b"early":
+                received.set()
+
+    # The server sends serial data in the same segment as a port configuration ack
+    with create_rfc2217_server(
+        after_ack={Rfc2217CmdId.SET_CONTROL: b"early"}
+    ) as server:
+        transport, _ = await create_serial_connection(
+            asyncio.get_running_loop(), Protocol, url=server.url, baudrate=115200
+        )
+
+        try:
+            await asyncio.wait_for(received.wait(), timeout=2)
+            assert events[0] == "connection_made"
+        finally:
+            transport.close()
+            await transport.wait_closed()
 
 
 def test_sync_peer_close_during_negotiation_raises() -> None:
