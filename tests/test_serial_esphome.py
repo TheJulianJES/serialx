@@ -941,6 +941,31 @@ async def test_sync_external_api_is_open() -> None:
     assert call.subscribe_serial_proxy_data(ANY) in api.mock_calls
 
 
+async def test_transport_serial_is_open() -> None:
+    """The serial of a connected transport is open, so sync pin access still works."""
+    api = mock_api_client("Zigbee")
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        asyncio.Protocol,
+        url=None,
+        transport_cls=ESPHomeSerialTransport,
+        api=api,
+        port_name="Zigbee",
+        baudrate=115200,
+    )
+    serial = transport.get_extra_info("serial")
+    assert serial.is_open
+
+    # Enqueued on the open port instead of only changing the on-open pin state
+    with pytest.warns(DeprecationWarning, match="transport.set_modem_pins"):
+        serial.dtr = False
+
+    transport.close()
+    await transport.wait_closed()
+
+    assert not serial.is_open
+
+
 def _identity(**overrides: object) -> SerialProxyIdentity:
     fields = {
         "instance": 0,

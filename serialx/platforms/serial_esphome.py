@@ -359,6 +359,9 @@ class ESPHomeSerial(BaseSerial):
         self._closed_unsub: Callable[[], None] | None = None
         self._identity_unsub: Callable[[], None] | None = None
         self._instance_subscribed = False
+        # Between `_async_open` and `_unsubscribe_callbacks`, also for the serial of a
+        # transport. An externally passed API is connected before and after that.
+        self._opened = False
 
         self._last_line_states = LineStateFlag(0)
 
@@ -559,9 +562,7 @@ class ESPHomeSerial(BaseSerial):
     @property
     def is_open(self) -> bool:
         """Return whether the serial port is open."""
-        # An externally passed API is connected before `open()` and after `close()`,
-        # so the data handler that `_open` installs is what marks the port as open
-        return self._api is not None and self._unsub is not None
+        return self._opened
 
     @translate_esphome_errors
     async def _async_open(self) -> None:
@@ -645,6 +646,8 @@ class ESPHomeSerial(BaseSerial):
             self._identity_unsub = await self._call_on_client_loop(
                 self._register_identity_handler()
             )
+
+        self._opened = True
 
     async def _register_closed_handler(self) -> Callable[[], None]:
         """Register `_on_connection_closed` on the client's loop and return the unsub."""
@@ -1124,6 +1127,8 @@ class ESPHomeSerial(BaseSerial):
 
     def _unsubscribe_callbacks(self) -> None:
         """Drop every callback `_async_open` registered on the API client."""
+        self._opened = False
+
         if self._unsub is not None:
             self._schedule_on_client_loop(self._unsub)
             self._unsub = None
