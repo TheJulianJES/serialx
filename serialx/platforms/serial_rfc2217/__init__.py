@@ -594,11 +594,13 @@ class RFC2217Serial(SocketSerial):
 
     def _reset_write_buffer(self) -> None:
         """Reset the write buffer."""
-        self._send_and_wait(PurgeDataCmd(what=PurgeDataValue.RECEIVE))
+        # The access server's transmit buffer holds data on its way to the device
+        self._send_and_wait(PurgeDataCmd(what=PurgeDataValue.TRANSMIT))
 
     def _reset_read_buffer(self) -> None:
         """Reset the read buffer."""
-        self._send_and_wait(PurgeDataCmd(what=PurgeDataValue.TRANSMIT))
+        # The access server's receive buffer holds data received from the device
+        self._send_and_wait(PurgeDataCmd(what=PurgeDataValue.RECEIVE))
         self._data_buffer.clear()
 
     def _write(self, b: Buffer, *, timeout: float | None) -> int:

@@ -21,12 +21,14 @@ from serialx.platforms.serial_rfc2217.types import (
     ModemStateFlag,
     NotifyLinestateCmd,
     NotifyModemstateCmd,
+    Rfc2217CmdId,
     SignatureCmd,
     TelnetOption,
     WillCmd,
 )
 
 from .common import HUB4COM_BINARY, SerialBackend, SerialPair, create_hub4com_pair
+from .rfc2217_server import create_rfc2217_server
 from .socket_relay import create_accept_then_close_server, create_silent_server
 
 
@@ -120,6 +122,22 @@ def test_sync_peer_close_during_negotiation_raises() -> None:
                 f"rfc2217://{addr}", baudrate=115200, connect_timeout=2.0
             ):
                 pass
+
+
+def test_sync_reset_buffers_purge_matching_server_buffers() -> None:
+    """Resetting the read/write buffer purges the server's receive/transmit buffer."""
+    with create_rfc2217_server() as server:
+        with Serial.from_url(server.url, baudrate=115200) as serial:
+            server.commands.clear()
+
+            # 1: purge access server receive data buffer
+            serial.reset_read_buffer()
+            assert server.commands == [(Rfc2217CmdId.PURGE_DATA, b"\x01")]
+            server.commands.clear()
+
+            # 2: purge access server transmit data buffer
+            serial.reset_write_buffer()
+            assert server.commands == [(Rfc2217CmdId.PURGE_DATA, b"\x02")]
 
 
 @pytest.mark.skipif(not HUB4COM_BINARY, reason="hub4com not available")
