@@ -762,6 +762,10 @@ class BaseSerial(io.RawIOBase):
         """Get the write timeout in seconds."""
         return self._write_timeout
 
+    @write_timeout.setter
+    def write_timeout(self, value: float | None) -> None:
+        self._write_timeout = value
+
     @property
     def close_timeout(self) -> float | None:
         """Seconds an async close drains unsent data before aborting, `None` waits."""
@@ -1200,6 +1204,10 @@ class BaseSerial(io.RawIOBase):
 
         """
         return self.write_timeout
+
+    @writeTimeout.setter
+    def writeTimeout(self, value: float | None) -> None:
+        self._write_timeout = value
 
     def reset_input_buffer(self) -> None:
         """Reset the read buffer.

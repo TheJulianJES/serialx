@@ -1,7 +1,7 @@
 """Tests for pyserial API compatibility shims."""
 
 import sys
-from unittest.mock import PropertyMock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 import pytest
 
@@ -183,6 +183,22 @@ def test_compat_settings_setters(
 
     reconfigure.assert_called_once_with(update)
     assert getattr(s, name) == value
+
+
+def test_compat_write_timeout_setter() -> None:
+    """`write_timeout` and `writeTimeout` set the default write timeout."""
+    s = Serial()
+    s._write = Mock(return_value=4)  # type: ignore[method-assign]
+
+    s.write_timeout = 0.5
+    assert s.write_timeout == 0.5
+    assert s.writeTimeout == 0.5
+
+    s.write(b"test")
+    s._write.assert_called_once_with(b"test", timeout=0.5)
+
+    s.writeTimeout = 1.5
+    assert s.write_timeout == 1.5
 
 
 def test_reconfigure_port_closed_raises() -> None:
