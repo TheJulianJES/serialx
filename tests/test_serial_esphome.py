@@ -1674,3 +1674,44 @@ async def test_connect_timeout_none_keeps_requests_finite() -> None:
     assert api.serial_proxy_set_mode_await_response.mock_calls == [
         call(instance=0, mode=SerialProxyMode.RAW, timeout=DEFAULT_REQUEST_TIMEOUT)
     ]
+
+
+async def test_unanswered_subscribe_is_released_on_shared_client() -> None:
+    """A subscribe cut short by the timeout may still hold the port, so it is released."""
+    api = mock_api_client("Zigbee")
+    api.serial_proxy_subscribe_await_response.side_effect = _never_answer
+
+    with pytest.raises(TimeoutError):
+        async with async_serial_for_url(
+            url=None,
+            transport_cls=ESPHomeSerialTransport,
+            api=api,
+            port_name="Zigbee",
+            baudrate=115200,
+            connect_timeout=0.1,
+        ):
+            pass
+
+    assert api.serial_proxy_unsubscribe.mock_calls == [call(0)]
+    assert len(api.disconnect.mock_calls) == 0
+
+
+async def test_refused_subscribe_is_not_released() -> None:
+    """A port the device refused to hand over is not this client's to release."""
+    api = mock_api_client("Zigbee")
+    api.serial_proxy_subscribe_await_response.return_value = (
+        SerialProxyRequestResponse(status=SerialProxyStatus.PORT_IN_USE)  # type:ignore[call-arg]
+    )
+
+    with pytest.raises(OSError) as excinfo:
+        async with async_serial_for_url(
+            url=None,
+            transport_cls=ESPHomeSerialTransport,
+            api=api,
+            port_name="Zigbee",
+            baudrate=115200,
+        ):
+            pass
+
+    assert excinfo.value.errno == errno.EBUSY
+    assert len(api.serial_proxy_unsubscribe.mock_calls) == 0

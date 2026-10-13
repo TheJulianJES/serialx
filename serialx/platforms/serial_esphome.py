@@ -927,13 +927,23 @@ class ESPHomeSerial(BaseSerial):
         # Awaited, not scheduled: the device answers a claim, and a refusal has to become an
         # exception here. Fire-and-forget would leave a rejected client waiting on a port it
         # never got, which looks exactly like a device with nothing to say.
-        await self._call_on_client_loop_validated(
-            self._api.serial_proxy_subscribe_await_response(
-                self._instance_id,
-                timeout=self._request_timeout,
-            )
-        )
+        # Claimed from the moment it is sent: a request cut short before the answer, by
+        # a timeout or `connect_timeout`, may still have reached the device, so closing
+        # has to release it.
         self._instance_subscribed = True
+
+        try:
+            await self._call_on_client_loop_validated(
+                self._api.serial_proxy_subscribe_await_response(
+                    self._instance_id,
+                    timeout=self._request_timeout,
+                )
+            )
+        except Exception as exc:
+            # A refusal or a lost connection leaves no claim to release
+            if not isinstance(exc, (TimeoutAPIError, TimeoutError)):
+                self._instance_subscribed = False
+            raise
 
         # Older devices have no mode at all and never answer the request
         version = self._api.api_version
