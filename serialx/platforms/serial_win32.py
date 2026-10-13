@@ -356,10 +356,21 @@ class Win32Serial(BaseSerial):
             # Windows has no way to automatically do this on close, we do it manually. A
             # driver-owned line (RTS under rtscts, DTR under dsrdtr) cannot be adjusted
             # via EscapeCommFunction, so those are skipped.
+            pins = self._modem_pins_on_close()
+
+            # Not the public `set_modem_pins()`, which re-raises errors as
+            # `SerialException` in pySerial compatibility mode
             try:
-                self.set_modem_pins(self._modem_pins_on_close())
+                self._set_modem_pins(pins)
             except OSError:
                 LOGGER.debug("Failed to set modem pins on close", exc_info=True)
+            else:
+                # Windows can't read DTR/RTS back, `get_modem_pins()` reports these
+                if pins.dtr is not PinState.UNDEFINED:
+                    self._dtr_state = pins.dtr
+
+                if pins.rts is not PinState.UNDEFINED:
+                    self._rts_state = pins.rts
 
             try:
                 CancelIo(self._handle)
