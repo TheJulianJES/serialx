@@ -33,7 +33,6 @@ from serialx import (
     SerialException,
     SerialPortInfo,
     SerialStreamWriter,
-    SerialTimeoutException,
     SerialTransport,
     StopBits,
     UnsupportedSetting,
@@ -42,6 +41,7 @@ from serialx import (
     list_serial_ports,
     open_serial_connection,
 )
+from serialx.serialutil import SerialTimeoutException
 
 VERSION = version("serialx-compat")
 __version__ = VERSION

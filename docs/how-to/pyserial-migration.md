@@ -137,9 +137,11 @@ pyserial re-raises all errors as `serial.SerialException`, including OS-level fa
 | Device missing               | `SerialException`               | `FileNotFoundError` or another `OSError`  |
 | I/O error                    | `SerialException`               | `OSError`                                 |
 | Protocol/backend failure     | `SerialException`               | `serialx.SerialException` (subclass)      |
-| Read/write timeout           | `SerialTimeoutException`        | `TimeoutError`                            |
+| Write timeout                | `SerialTimeoutException`        | `TimeoutError`                            |
 | Unsupported setting          | `ValueError` / `SerialException`| `serialx.UnsupportedSetting`              |
 | Unknown URL scheme           | —                               | `serialx.UnknownUriScheme`                |
+
+The `serial` module of `serialx-compat` keeps pyserial's behavior: errors are re-raised as `serial.SerialException`, and timeouts as `serial.SerialTimeoutException`, which is also a `TimeoutError`.
 
 ## Async migration
 Existing packages like pyserial-asyncio and pyserial-asyncio-fast have a straightforward public API: `create_serial_connection` and `open_serial_connection` allow you to interact with a `SerialTransport`. serialx has the same public API and exposes the same functions, just replace the imports.

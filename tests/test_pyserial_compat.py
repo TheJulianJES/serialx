@@ -1,6 +1,7 @@
 """Tests for pyserial API compatibility shims."""
 
 import sys
+from unittest.mock import Mock
 
 import pytest
 
@@ -30,9 +31,10 @@ from serialx import (
     SerialException,
     SerialPortInfo,
 )
+from serialx.serialutil import SerialTimeoutException
 from serialx.tools.list_ports import comports, grep
 from serialx.tools.list_ports_common import ListPortInfo
-from tests.common import SerialPair
+from tests.common import SerialPair, SerialQuirk
 
 
 def test_compat_constructor_kwargs(serial_pair: SerialPair) -> None:
@@ -155,6 +157,43 @@ def test_reconfigure_port_closed_raises() -> None:
     s = Serial()
     with pytest.raises(SerialException, match="closed port"):
         s.reconfigure_port(baudrate=115200)
+
+
+def test_compat_timeout_exception() -> None:
+    """In pyserial mode a `TimeoutError` becomes a `SerialTimeoutException`."""
+    s = Serial(_wrap_exceptions=True)
+    s._write = Mock(side_effect=TimeoutError("Write timeout"))  # type: ignore[method-assign]
+
+    with pytest.raises(SerialTimeoutException, match="Write timeout") as exc_info:
+        s.write(b"test")
+
+    # Catchable like in pyserial, and as the `TimeoutError` native serialx raises
+    assert isinstance(exc_info.value, SerialException)
+    assert isinstance(exc_info.value, TimeoutError)
+    assert isinstance(exc_info.value.__cause__, TimeoutError)
+
+
+@pytest.mark.skip_quirks(SerialQuirk.NO_WRITE_TIMEOUT)
+@pytest.mark.xfail(
+    sys.platform.startswith("freebsd"),
+    reason="FreeBSD ucom driver does not enforce write buffer limits",
+)
+def test_compat_write_timeout(serial_pair: SerialPair) -> None:
+    """A write timeout in pyserial mode raises `SerialTimeoutException`."""
+    with (
+        Serial.from_url(
+            serial_pair.left,
+            baudrate=9600,
+            write_timeout=0.1,
+            _wrap_exceptions=True,  # type: ignore[call-arg]
+        ) as left,
+        Serial.from_url(serial_pair.right, baudrate=9600) as _right,
+    ):
+        data = b"x" * 1024
+
+        with pytest.raises(SerialTimeoutException):
+            for _ in range(1000):
+                left.write(data)
 
 
 def test_compat_no_arg_construction() -> None:

@@ -245,6 +245,10 @@ class UnknownUriScheme(SerialException):
     """Raised when a URI scheme has no registered handler."""
 
 
+class SerialTimeoutException(SerialException, TimeoutError):
+    """pyserial-compatible timeout, raised instead of `TimeoutError` by the shim."""
+
+
 class StopBits(float, Enum):
     """Stop bits configuration."""
 
@@ -454,6 +458,10 @@ def maybe_wrap_exceptions(
             return func(self, *args, **kwargs)
         except Exception as exc:
             if self._wrap_exceptions:
+                # pyserial raises `SerialTimeoutException` for write timeouts
+                if isinstance(exc, TimeoutError):
+                    raise SerialTimeoutException(str(exc)) from exc
+
                 raise SerialException(str(exc)) from exc
 
             raise
