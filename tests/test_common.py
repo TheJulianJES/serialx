@@ -5,9 +5,11 @@ from __future__ import annotations
 from asyncio import IncompleteReadError
 from collections.abc import Generator
 import errno
+import itertools
 import logging
 import time
 import traceback
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
@@ -233,7 +235,7 @@ def test_readexactly_remaining_timeout_never_negative() -> None:
         serial.readexactly(3)
 
     assert exc_info.value.partial == b"ab"
-    assert serial.timeouts == [0.05, 0.0, 0.0]
+    assert serial.timeouts == [pytest.approx(0.05, abs=0.01), 0.0, 0.0]
 
 
 def test_read_until_returns_partial_on_timeout() -> None:
@@ -242,11 +244,11 @@ def test_read_until_returns_partial_on_timeout() -> None:
 
     # The first read used up the timeout, so `read_until` stops after it
     assert serial.read_until(b"\n") == b"a"
-    assert serial.timeouts == [0.05]
+    assert serial.timeouts == [pytest.approx(0.05, abs=0.01)]
 
     # A zero timeout drains what is already buffered, then returns
     assert serial.read_until(b"\n", timeout=0) == b"b"
-    assert serial.timeouts == [0.05, 0, 0]
+    assert serial.timeouts[1:] == [0, 0]
 
 
 class _StreamingSerial(_StubSerial):
@@ -268,6 +270,26 @@ def test_read_until_stops_at_deadline_while_data_arrives() -> None:
 
     assert elapsed() == pytest.approx(0.1, abs=0.1)
     assert 0 < len(result) <= 10
+
+
+def test_read_until_deadline_includes_time_between_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Time spent between reads also counts against the `read_until` timeout."""
+    ticks = itertools.count()
+    now: list[float] = []
+
+    def _monotonic() -> float:
+        # Every clock reading is 10 ms later, wherever in the loop it happens
+        now.append(next(ticks) / 100)
+        return now[-1]
+
+    monkeypatch.setattr("serialx.common.time", SimpleNamespace(monotonic=_monotonic))
+
+    serial = _StreamingSerial("/dev/null", do_not_open=True, read_timeout=0.1)
+    serial.read_until(b"\n", size=100)
+
+    assert now[-1] == pytest.approx(0.1)
 
 
 def test_check_broken_raises_fresh_instance() -> None:

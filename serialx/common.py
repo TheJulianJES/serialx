@@ -938,14 +938,14 @@ class BaseSerial(io.RawIOBase):
         buffer = bytearray(n)
         view = memoryview(buffer)
         remaining = n
-        remaining_timeout = self.read_timeout if timeout is None else timeout
+        start_timeout = self.read_timeout if timeout is None else timeout
+        deadline = None if start_timeout is None else time.monotonic() + start_timeout
 
         while remaining > 0:
-            with measure_time() as get_elapsed:
-                read = self.readinto(view, timeout=remaining_timeout)
-
-            if remaining_timeout is not None:
-                remaining_timeout = max(0.0, remaining_timeout - get_elapsed())
+            remaining_timeout = (
+                None if deadline is None else max(0.0, deadline - time.monotonic())
+            )
+            read = self.readinto(view, timeout=remaining_timeout)
 
             view = view[read:]
             remaining -= read
@@ -970,14 +970,13 @@ class BaseSerial(io.RawIOBase):
         byte = bytearray(1)
         expected_len = len(expected)
         start_timeout = self.read_timeout if timeout is None else timeout
-        remaining_timeout = start_timeout
+        deadline = None if start_timeout is None else time.monotonic() + start_timeout
 
         while True:
-            with measure_time() as get_elapsed:
-                read = self.readinto(byte, timeout=remaining_timeout)
-
-            if remaining_timeout is not None:
-                remaining_timeout = max(0.0, remaining_timeout - get_elapsed())
+            remaining_timeout = (
+                None if deadline is None else max(0.0, deadline - time.monotonic())
+            )
+            read = self.readinto(byte, timeout=remaining_timeout)
 
             # Timed out, return what we have so far
             if read == 0:
@@ -993,7 +992,7 @@ class BaseSerial(io.RawIOBase):
 
             # Like pyserial, the timeout bounds the whole call even if data keeps
             # arriving. A zero timeout drains what is already buffered instead.
-            if start_timeout and remaining_timeout == 0:
+            if deadline is not None and start_timeout and time.monotonic() >= deadline:
                 break
 
         return bytes(buffer)
