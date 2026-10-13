@@ -1433,6 +1433,29 @@ def _identity_handlers(api: MagicMock) -> list[Callable[[SerialProxyIdentity], N
     return [c.args[0] for c in api.subscribe_serial_proxy_identity.mock_calls]
 
 
+async def test_list_serial_ports_via_uri_handles_identity_messages() -> None:
+    """Identity messages the listing itself causes reach a working handler."""
+    api = mock_api_client("Zigbee")
+    api.api_version = APIVersion(1, 18)
+
+    async def get_identity(instance: int, *, timeout: float) -> SerialProxyIdentity:
+        # The client also hands the reply to every identity subscriber
+        identity = _identity(instance=instance)
+        for handler in _identity_handlers(api):
+            handler(identity)
+        return identity
+
+    api.attach_mock(AsyncMock(side_effect=get_identity), "serial_proxy_get_identity")
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        ports = await async_list_serial_ports(
+            Platform.ESPHOME, path="esphome://127.0.0.1:6053"
+        )
+
+    assert [port.serial_number for port in ports] == ["AABBCCDDEEFF"]
+    assert len(api.disconnect.mock_calls) == 1
+
+
 async def test_device_removed_breaks_transport() -> None:
     """Pulling the device ends the session like a vanished device node."""
     api = mock_api_client("Zigbee")

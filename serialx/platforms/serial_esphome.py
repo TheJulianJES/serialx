@@ -1449,6 +1449,8 @@ async def async_esphome_list_serial_ports(
     *args: Any, **kwargs: Any
 ) -> list[SerialPortInfo]:
     """List serial ports for ESPhome."""
+    # Like the transport, run on the caller's loop, which the client's callbacks expect
+    kwargs.setdefault("loop", asyncio.get_running_loop())
     serial = ESPHomeSerial(*args, **kwargs)
 
     try:
