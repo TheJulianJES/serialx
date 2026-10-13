@@ -1209,6 +1209,9 @@ class ESPHomeSerialTransport(BaseSerialTransport):
 
         await self._serial._async_configure_port()
 
+        # The device may have gone away while the port was being claimed
+        self._check_broken()
+
         self._call_protocol_connection_made()
 
         # The device streams from the subscribe onwards, while the protocol only learns
@@ -1288,6 +1291,13 @@ class ESPHomeSerialTransport(BaseSerialTransport):
             return
 
         self._mark_broken(exc)
+
+        # Until the protocol is told of the transport, `_connect` is still claiming the
+        # port. It fails with this error once the claim is done, and the failed connect
+        # releases the port: closing now would leave the claim that is in flight behind.
+        if not self._connection_made_called:
+            return
+
         self._close_with(exc)
 
     def _schedule_unsub(self, unsub: Callable[[], None]) -> None:

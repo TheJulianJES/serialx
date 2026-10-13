@@ -1495,6 +1495,57 @@ async def test_device_removed_leaves_external_api_alone() -> None:
     assert len(api.disconnect.mock_calls) == 0
 
 
+@pytest.mark.parametrize("external_api", [True, False])
+async def test_device_removed_while_claiming_port(external_api: bool) -> None:
+    """A device pulled while the port is being claimed fails the open and releases it."""
+    api = mock_api_client("Zigbee")
+    events: list[object] = []
+
+    class RecordingProtocol(asyncio.Protocol):
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            events.append("connection_made")
+
+        def connection_lost(self, exc: Exception | None) -> None:
+            events.append("connection_lost")
+
+    async def subscribe(instance: int, *, timeout: float) -> None:
+        # The device reports the removal before it answers the claim
+        for handler in _identity_handlers(api):
+            handler(_identity(flags=0, serial_number=""))
+
+    api.serial_proxy_subscribe_await_response.side_effect = subscribe
+
+    with (
+        patch("serialx.platforms.serial_esphome.APIClient", return_value=api),
+        pytest.raises(OSError) as excinfo,
+    ):
+        if external_api:
+            await create_serial_connection(
+                asyncio.get_running_loop(),
+                RecordingProtocol,
+                url=None,
+                baudrate=115200,
+                transport_cls=ESPHomeSerialTransport,
+                api=api,
+                port_name="Zigbee",
+            )
+        else:
+            await create_serial_connection(
+                asyncio.get_running_loop(),
+                RecordingProtocol,
+                url="esphome://127.0.0.1:6053/?port_name=Zigbee",
+                baudrate=115200,
+            )
+
+    assert excinfo.value.errno == errno.ENXIO
+    assert events == []
+
+    # The claim that was in flight is released, not left to refuse the next client
+    await asyncio.sleep(0)
+    assert api.serial_proxy_unsubscribe.mock_calls == [call(0)]
+    assert len(api.disconnect.mock_calls) == (0 if external_api else 1)
+
+
 async def test_device_swapped_breaks_transport() -> None:
     """A different device appearing in the socket is not the one this session claimed."""
     api = mock_api_client("Zigbee")
