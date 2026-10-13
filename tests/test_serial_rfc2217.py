@@ -1,6 +1,7 @@
 """RFC2217 serial port tests."""
 
 import asyncio
+from collections.abc import Iterator
 import sys
 
 import pytest
@@ -21,13 +22,22 @@ from serialx.platforms.serial_rfc2217.types import (
     ModemStateFlag,
     NotifyLinestateCmd,
     NotifyModemstateCmd,
+    Rfc2217CmdId,
     SignatureCmd,
     TelnetOption,
     WillCmd,
 )
 
 from .common import HUB4COM_BINARY, SerialBackend, SerialPair, create_hub4com_pair
+from .rfc2217_server import FakeRfc2217Server, create_rfc2217_server
 from .socket_relay import create_accept_then_close_server, create_silent_server
+
+
+@pytest.fixture
+def fake_rfc2217_server() -> Iterator[FakeRfc2217Server]:
+    """Fake RFC 2217 server for a single client."""
+    with create_rfc2217_server() as server:
+        yield server
 
 
 def test_unknown_telnet_option() -> None:
@@ -157,3 +167,46 @@ async def test_async_negotiate_comport_rejected_by_hub4com(
                 baudrate=115200,
                 connect_timeout=1.0,
             )
+
+
+def test_sync_open_without_state_mask_acks(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """Servers that don't ack the state mask commands, like pyserial's, work."""
+    fake_rfc2217_server.unacked_cmd_ids = {
+        Rfc2217CmdId.SET_LINESTATE_MASK,
+        Rfc2217CmdId.SET_MODEMSTATE_MASK,
+    }
+
+    with Serial.from_url(
+        fake_rfc2217_server.url, baudrate=115200, connect_timeout=5.0
+    ) as serial:
+        serial.write(b"data")
+        serial.flush()
+
+
+async def test_async_open_without_state_mask_acks(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """Servers that don't ack the state mask commands, like pyserial's, work."""
+    fake_rfc2217_server.unacked_cmd_ids = {
+        Rfc2217CmdId.SET_LINESTATE_MASK,
+        Rfc2217CmdId.SET_MODEMSTATE_MASK,
+    }
+
+    transport, _ = await asyncio.wait_for(
+        create_serial_connection(
+            asyncio.get_running_loop(),
+            asyncio.Protocol,
+            url=fake_rfc2217_server.url,
+            baudrate=115200,
+            connect_timeout=5.0,
+        ),
+        2,
+    )
+
+    transport.write(b"data")
+    await asyncio.wait_for(transport.flush(), 2)
+
+    transport.close()
+    await transport.wait_closed()

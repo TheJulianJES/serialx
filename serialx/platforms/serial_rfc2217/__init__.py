@@ -472,9 +472,9 @@ class RFC2217Serial(SocketSerial):
         self._engine.mark_negotiated()
         LOGGER.debug("Negotiation complete: server accepted COM-PORT-OPTION")
 
+        # Not every server acks these (pyserial's doesn't), so don't wait for them.
         for cmd in self._engine.build_state_mask_commands():
-            with self._socket_timeout(self._connect_timeout):
-                self._send_and_wait(cmd)
+            self._send_command(cmd)
 
     def _build_port_config_commands(
         self, update: PortSettingsUpdate
@@ -811,8 +811,9 @@ class RFC2217SerialTransport(BaseSerialTransport):
         self._serial._engine.mark_negotiated()
         LOGGER.debug("Negotiation complete: server accepted COM-PORT-OPTION")
 
+        # Not every server acks these (pyserial's doesn't), so don't wait for them.
         for cmd in self._serial._engine.build_state_mask_commands():
-            await self._send_and_wait(cmd)
+            self._send_command(cmd)
 
     async def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         """Send serial port configuration to the access server."""
