@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import logging
 from typing import Any, final
 
@@ -332,7 +333,27 @@ class PyodideSerialTransport(BaseSerialTransport):
 
     async def _reader_loop(self) -> None:
         while self._js_reader is not None:
-            result = await self._js_reader.read()
+            try:
+                result = await self._js_reader.read()
+            except Exception as e:
+                assert self._js_port is not None
+                readable = self._js_port.readable
+
+                # A disconnect leaves `readable` null. Break, framing, parity, and
+                # buffer overrun errors only end the current stream: the port hands
+                # out a new one and we can keep reading.
+                if readable is None:
+                    _LOGGER.debug("Fatal error reading from serial port: %s", e)
+                    exc = OSError(errno.EIO, f"Error reading from serial port: {e}")
+                    exc.__cause__ = e
+                    self._cleanup(exc)
+                    return
+
+                _LOGGER.warning("Error reading from serial port, continuing: %s", e)
+                self._js_reader.releaseLock()
+                self._js_reader = readable.getReader()
+                continue
+
             if result.done:
                 self._cleanup(RuntimeError("Other side has closed"))
                 return

@@ -4,6 +4,8 @@
 export class FakeSerialPort {
   #peer: FakeSerialPort | null = null;
   #open = false;
+  // Set by `disconnect()`: `readable` stays null and writes fail until reopened
+  #fatal = false;
   #options: SerialOptions | null = null;
   // Writers stalled on hardware flow control, woken by a peer RTS change or close
   #ctsWaiters: Array<() => void> = [];
@@ -22,6 +24,14 @@ export class FakeSerialPort {
   }
 
   get readable(): ReadableStream<Uint8Array> | null {
+    // Like a real port, an errored stream is replaced unless the error was fatal
+    if (this.#readable === null && this.#open && !this.#fatal) {
+      this.#readable = new ReadableStream<Uint8Array>({
+        start: (controller) => {
+          this.#inboundController = controller;
+        },
+      });
+    }
     return this.#readable;
   }
 
@@ -48,12 +58,6 @@ export class FakeSerialPort {
     this.#open = true;
     this.#options = options;
 
-    this.#readable = new ReadableStream<Uint8Array>({
-      start: (controller) => {
-        this.#inboundController = controller;
-      },
-    });
-
     this.#writable = new WritableStream<Uint8Array>({
       write: async (chunk) => {
         const bytes = chunk.slice();
@@ -61,9 +65,13 @@ export class FakeSerialPort {
           await new Promise<void>((resolve) => this.#ctsWaiters.push(resolve));
         }
         if (!this.#open) return;
+        if (this.#fatal) {
+          throw new DOMException("The device has been lost.", "NetworkError");
+        }
+        // Bytes arriving between a read error and the next `getReader()` are kept
         const peer = this.#peer;
-        if (peer && peer.#inboundController) {
-          peer.#inboundController.enqueue(bytes);
+        if (peer && peer.readable !== null) {
+          peer.#inboundController?.enqueue(bytes);
         }
       },
     });
@@ -83,7 +91,22 @@ export class FakeSerialPort {
     this.#readable = null;
     this.#writable = null;
     this.#options = null;
+    this.#fatal = false;
     this.#wakeCtsWaiters();
+  }
+
+  // Error `readable` like a break, framing, parity or buffer overrun error does:
+  // the next `readable` access returns a new stream
+  errorReadable(name: string = "BreakError"): void {
+    this.#inboundController?.error(new DOMException(`Fake ${name}`, name));
+    this.#inboundController = null;
+    this.#readable = null;
+  }
+
+  // Simulate unplugging the device: `readable` errors and stays null, writes fail
+  disconnect(): void {
+    this.errorReadable("NetworkError");
+    this.#fatal = true;
   }
 
   async setSignals(signals: SerialOutputSignals = {}): Promise<void> {

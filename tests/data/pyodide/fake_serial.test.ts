@@ -118,3 +118,44 @@ test("closing one side ends its own reader but leaves the peer intact", async ()
   peerReader.releaseLock();
   await b.close();
 });
+
+test("a non-fatal read error replaces the readable stream", async () => {
+  const [a, b] = await openBoth();
+  const writer = a.writable!.getWriter();
+  const reader = b.readable!.getReader();
+
+  const pending = reader.read();
+  b.errorReadable("FramingError");
+  await expect(pending).rejects.toMatchObject({ name: "FramingError" });
+  reader.releaseLock();
+
+  // Bytes sent before the next reader is acquired are not lost
+  await writer.write(new Uint8Array([7]));
+  const newReader = b.readable!.getReader();
+  const { value } = await newReader.read();
+  expect(Array.from(value!)).toEqual([7]);
+
+  writer.releaseLock();
+  newReader.releaseLock();
+  await a.close();
+  await b.close();
+});
+
+test("disconnecting errors the readable and leaves it null", async () => {
+  const [a, b] = await openBoth();
+  const reader = a.readable!.getReader();
+  const writer = a.writable!.getWriter();
+
+  const pending = reader.read();
+  a.disconnect();
+  await expect(pending).rejects.toMatchObject({ name: "NetworkError" });
+  expect(a.readable).toBeNull();
+  await expect(writer.write(new Uint8Array([1]))).rejects.toMatchObject({
+    name: "NetworkError",
+  });
+
+  reader.releaseLock();
+  writer.releaseLock();
+  await a.close();
+  await b.close();
+});
