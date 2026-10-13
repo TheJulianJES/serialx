@@ -236,6 +236,8 @@ class Rfc2217AckWaiter:
     cmd: Rfc2217Command
     ack: Rfc2217Command | None = None
     abandoned: bool = False
+    # An ack of this type was discarded as late while this request was queued
+    passed_late_ack: bool = False
 
 
 class Rfc2217:
@@ -296,9 +298,18 @@ class Rfc2217:
 
     def abandon_ack(self, waiter: Rfc2217AckWaiter) -> None:
         """Stop waiting for the ack of a request."""
-        # Keep it queued: its ack may still arrive and must not be mistaken for
-        # the ack of a later request of the same type
-        waiter.abandoned = True
+        waiters = self._ack_waiters.get(waiter.cmd.CMD_ID)
+        if waiters is None or waiter not in waiters:
+            return
+
+        if waiter.passed_late_ack:
+            # The ack discarded as late while it waited was most likely its own,
+            # the request ahead of it having never been acked
+            waiters.remove(waiter)
+        else:
+            # Keep it queued: its ack may still arrive and must not be mistaken
+            # for the ack of a later request of the same type
+            waiter.abandoned = True
 
     def _resolve_ack(self, ack: Rfc2217Command) -> None:
         """Hand an ack to the oldest request of its type."""
@@ -309,12 +320,33 @@ class Rfc2217:
             LOGGER.debug("Ignoring unsolicited %r", ack)
             return
 
+        for _ in range(self._num_lost_acks(waiters, ack)):
+            LOGGER.debug("Dropping %r, its ack never arrived", waiters.popleft().cmd)
+
         waiter = waiters.popleft()
         if waiter.abandoned:
             LOGGER.debug("Discarding late ack %r", ack)
+
+            for queued in waiters:
+                queued.passed_late_ack = True
+
             return
 
         waiter.ack = ack
+
+    @staticmethod
+    def _num_lost_acks(waiters: deque[Rfc2217AckWaiter], ack: Rfc2217Command) -> int:
+        """Count the abandoned requests at the head of the queue that weren't acked."""
+        # Servers echo the requested value, so an ack that doesn't match abandoned
+        # requests but does match one right behind them means theirs never came
+        for i, waiter in enumerate(waiters):
+            if waiter.cmd == ack:
+                return i
+
+            if not waiter.abandoned:
+                break
+
+        return 0
 
     def build_port_config_commands(
         self, update: PortSettingsUpdate

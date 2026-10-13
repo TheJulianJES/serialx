@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Callable, Iterator
+import contextlib
 import sys
 import threading
 import time
@@ -28,6 +29,7 @@ from serialx.platforms.serial_rfc2217.types import (
     ModemStateFlag,
     NotifyLinestateCmd,
     NotifyModemstateCmd,
+    Rfc2217CmdId,
     SetBaudrateCmd,
     SignatureCmd,
     TelnetOption,
@@ -345,6 +347,101 @@ async def test_async_unsent_command_expects_no_ack(
         transport._send_and_wait(SetBaudrateCmd(baudrate=2400)), 2
     )
     assert ack == SetBaudrateCmd(baudrate=2400)
+
+    transport.close()
+    await transport.wait_closed()
+
+
+def test_sync_lost_ack_only_fails_its_command(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """A command whose ack never arrives doesn't take the next command's ack."""
+    with Serial.from_url(
+        fake_rfc2217_server.url,
+        baudrate=115200,
+        read_timeout=0.3,
+        connect_timeout=0.3,
+    ) as serial:
+        fake_rfc2217_server.drop_acks(Rfc2217CmdId.SET_CONTROL)
+
+        with pytest.raises(TimeoutError):
+            serial.dtr = True
+
+        serial.rts = True
+        serial.rts = False
+        serial.dtr = False
+
+
+async def test_async_lost_ack_only_fails_its_command(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """A command whose ack never arrives doesn't take the next command's ack."""
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        asyncio.Protocol,
+        url=fake_rfc2217_server.url,
+        baudrate=115200,
+    )
+
+    fake_rfc2217_server.drop_acks(Rfc2217CmdId.SET_CONTROL)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(transport.set_modem_pins(dtr=True), 0.3)
+
+    await asyncio.wait_for(transport.set_modem_pins(rts=True), 2)
+    await asyncio.wait_for(transport.set_modem_pins(rts=False), 2)
+    await asyncio.wait_for(transport.set_modem_pins(dtr=False), 2)
+
+    transport.close()
+    await transport.wait_closed()
+
+
+def test_sync_lost_ack_of_repeated_command_recovers(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """A lost ack of a command that is repeated identically doesn't stick."""
+    with Serial.from_url(
+        fake_rfc2217_server.url,
+        baudrate=115200,
+        read_timeout=0.3,
+        write_timeout=0.3,
+        connect_timeout=0.3,
+    ) as serial:
+        fake_rfc2217_server.drop_acks(Rfc2217CmdId.SET_BAUDRATE)
+
+        with pytest.raises(TimeoutError):
+            serial.flush()
+
+        # Its ack is indistinguishable from a late ack of the first flush
+        with contextlib.suppress(TimeoutError):
+            serial.flush()
+
+        serial.flush()
+        serial.flush()
+
+
+async def test_async_lost_ack_of_repeated_command_recovers(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """A lost ack of a command that is repeated identically doesn't stick."""
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        asyncio.Protocol,
+        url=fake_rfc2217_server.url,
+        baudrate=115200,
+    )
+
+    fake_rfc2217_server.drop_acks(Rfc2217CmdId.SET_BAUDRATE)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(transport.flush(), 0.3)
+
+    # Its ack is indistinguishable from a late ack of the first flush
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(transport.flush(), 0.3)
+
+    await asyncio.wait_for(transport.flush(), 2)
+    await asyncio.wait_for(transport.flush(), 2)
 
     transport.close()
     await transport.wait_closed()
