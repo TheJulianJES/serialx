@@ -322,7 +322,7 @@ async def test_async_flush_cancelled(pty_transport: PtyTransport) -> None:
     transport.write(b"x" * 200_000)
 
     for _ in range(10):
-        with pytest.raises(TimeoutError):
+        with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(transport.flush(), 0.001)
 
     assert not transport._empty_waiters

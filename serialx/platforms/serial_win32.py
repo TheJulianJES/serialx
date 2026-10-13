@@ -804,11 +804,23 @@ class Win32SerialTransport(BaseSerialTransport):
         if self._internal_transport is not None:
             self._internal_transport.set_protocol(protocol)
 
+    def _flush_closing(self) -> bool:
+        """Whether a flush has to wait for the close instead of flushing the handle."""
+        # The proactor transport can also close itself, e.g. after a fatal error
+        return (
+            self._closing
+            or self._serial is None
+            or (
+                self._internal_transport is not None
+                and self._internal_transport.is_closing()
+            )
+        )
+
     async def _flush(self) -> None:
         """Flush write buffers, waiting until all data is written, internal."""
         # The proactor transport only supports a single empty waiter at a time
         async with self._flush_lock:
-            if not self._closing and self._serial is not None:
+            if not self._flush_closing():
                 assert self._internal_transport is not None
                 try:
                     # Wait for asyncio buffer to drain
@@ -817,11 +829,12 @@ class Win32SerialTransport(BaseSerialTransport):
                     self._internal_transport._reset_empty_waiter()  # type:ignore[attr-defined]
 
             # The close releases the handle, wait for it instead
-            if self._closing or self._serial is None:
+            if self._flush_closing():
                 await asyncio.shield(self._closed_waiter)
                 return
 
             # Wait for hardware buffer to flush
+            assert self._serial is not None
             await self._loop.run_in_executor(None, self._serial.flush)
 
     async def _get_modem_pins(self) -> ModemPins:
