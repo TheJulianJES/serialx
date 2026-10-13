@@ -118,7 +118,10 @@ def test_sync_malformed_ack_fails_request() -> None:
             num_commands = len(server.commands)
 
             def reply_malformed() -> None:
+                deadline = time.monotonic() + 5
+
                 while len(server.commands) == num_commands:
+                    assert time.monotonic() < deadline, "request never received"
                     time.sleep(0.01)
 
                 server.send(b"AB")
@@ -131,7 +134,8 @@ def test_sync_malformed_ack_fails_request() -> None:
             with pytest.raises(SerialException, match="SET_CONTROL"):
                 serial.set_modem_pins(dtr=True)
 
-            thread.join()
+            thread.join(timeout=5)
+            assert not thread.is_alive()
 
             serial.set_modem_pins(dtr=False)
             assert serial.read(4) == b"ABCD"
@@ -155,8 +159,11 @@ async def test_async_malformed_ack_fails_request() -> None:
             num_commands = len(server.commands)
             request = asyncio.ensure_future(transport.set_modem_pins(dtr=True))
 
-            while len(server.commands) == num_commands:
-                await asyncio.sleep(0.01)
+            async def request_received() -> None:
+                while len(server.commands) == num_commands:
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(request_received(), timeout=5)
 
             server.send(b"AB")
             server.send_ack(Rfc2217CmdId.SET_CONTROL, bytes([20]))
