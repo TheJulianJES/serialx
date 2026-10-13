@@ -1217,6 +1217,9 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         pending_data, self._pending_data = self._pending_data, None
         assert pending_data is not None
         for data in pending_data:
+            # The protocol may close the transport from any of its callbacks
+            if self._closing:
+                break
             self._protocol.data_received(data)
 
     async def _register_transport_closed_handler(self) -> Callable[[], None]:
@@ -1321,6 +1324,10 @@ class ESPHomeSerialTransport(BaseSerialTransport):
             self._loop.call_soon_threadsafe(self._deliver_data, msg.data)
 
     def _deliver_data(self, data: bytes) -> None:
+        # Data marshalled from another loop can still arrive after the transport closed
+        if self._closing:
+            return
+
         if self._pending_data is not None:
             LOGGER.debug(
                 "Data received before connection made, buffering (%d bytes, %d total packets)",

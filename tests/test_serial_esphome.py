@@ -768,6 +768,92 @@ async def test_data_before_connection_made_is_held() -> None:
     await transport.wait_closed()
 
 
+async def test_held_data_not_replayed_after_close() -> None:
+    """A protocol that closes the transport in `connection_made` gets no held data."""
+    api = mock_api_client("Zigbee")
+    events: list[object] = []
+
+    class ClosingProtocol(asyncio.Protocol):
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            events.append("connection_made")
+            transport.close()
+
+        def connection_lost(self, exc: Exception | None) -> None:
+            events.append("connection_lost")
+
+        def data_received(self, data: bytes) -> None:
+            events.append(data)
+
+    async def subscribe(instance: int, *, timeout: float) -> None:
+        on_data = api.subscribe_serial_proxy_data.call_args.args[0]
+        on_data(SerialProxyDataReceived(instance=instance, data=b"early"))  # type:ignore[call-arg]
+
+    api.serial_proxy_subscribe_await_response.side_effect = subscribe
+
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        ClosingProtocol,
+        url=None,
+        baudrate=115200,
+        transport_cls=ESPHomeSerialTransport,
+        api=api,
+        port_name="Zigbee",
+    )
+    await transport.wait_closed()
+
+    assert events == ["connection_made", "connection_lost"]
+
+
+async def test_cross_loop_data_after_close_is_dropped() -> None:
+    """Data marshalled from the client's loop before a close is not delivered after it."""
+    api = mock_api_client("Zigbee")
+    events: list[object] = []
+
+    class RecordingProtocol(asyncio.Protocol):
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            events.append("connection_made")
+
+        def connection_lost(self, exc: Exception | None) -> None:
+            events.append("connection_lost")
+
+        def data_received(self, data: bytes) -> None:
+            events.append(data)
+
+    client_loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=client_loop.run_forever, daemon=True)
+    thread.start()
+    api.loop = client_loop
+
+    try:
+        transport, _ = await create_serial_connection(
+            asyncio.get_running_loop(),
+            RecordingProtocol,
+            url=None,
+            baudrate=115200,
+            transport_cls=ESPHomeSerialTransport,
+            api=api,
+            port_name="Zigbee",
+        )
+
+        # The data arrives on the client's loop and is handed over to ours, but the
+        # transport is closed before our loop gets to it
+        on_data = api.subscribe_serial_proxy_data.call_args.args[0]
+
+        async def receive() -> None:
+            on_data(SerialProxyDataReceived(instance=0, data=b"late"))  # type:ignore[call-arg]
+
+        asyncio.run_coroutine_threadsafe(receive(), client_loop).result()
+        transport.close()
+        await transport.wait_closed()
+        await asyncio.sleep(0)
+    finally:
+        client_loop.call_soon_threadsafe(client_loop.stop)
+        thread.join(timeout=5)
+        client_loop.close()
+
+    assert events == ["connection_made", "connection_lost"]
+
+
 async def test_mode_protocol_kwarg_with_external_api() -> None:
     """The `mode` kwarg is honored when the API client is passed in externally."""
     api = mock_api_client("Zigbee")
