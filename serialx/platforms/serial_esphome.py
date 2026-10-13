@@ -665,6 +665,10 @@ class ESPHomeSerial(BaseSerial):
         )
         ports = []
 
+        # An IPv6 address has to be bracketed, or its colons read as the port
+        host = self._api.address
+        netloc = f"[{host}]" if ":" in host else host
+
         for instance, proxy in enumerate(device_info.serial_proxies):
             info = SerialPortInfo(
                 device="",
@@ -714,7 +718,7 @@ class ESPHomeSerial(BaseSerial):
             url = urllib.parse.urlunparse(
                 urllib.parse.ParseResult(
                     scheme="esphome",
-                    netloc=f"{self._api.address}:{self._api.port}",
+                    netloc=f"{netloc}:{self._api.port}",
                     path="/",
                     params="",
                     query=urllib.parse.urlencode(query),

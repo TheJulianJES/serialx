@@ -1433,6 +1433,20 @@ def _identity_handlers(api: MagicMock) -> list[Callable[[SerialProxyIdentity], N
     return [c.args[0] for c in api.subscribe_serial_proxy_identity.mock_calls]
 
 
+async def test_list_serial_ports_ipv6_url() -> None:
+    """A port listed for an IPv6 address gets a URL that parses back to it."""
+    api = mock_api_client("Zigbee")
+    api.address = "fd00::1"
+
+    ports = await async_list_serial_ports(Platform.ESPHOME, api=api)
+
+    assert [port.device for port in ports] == [
+        "esphome://[fd00::1]:6053/?port_name=Zigbee"
+    ]
+    parsed = urllib.parse.urlparse(ports[0].device)
+    assert (parsed.hostname, parsed.port) == ("fd00::1", ESPHOME_DEFAULT_PORT)
+
+
 async def test_list_serial_ports_via_uri_handles_identity_messages() -> None:
     """Identity messages the listing itself causes reach a working handler."""
     api = mock_api_client("Zigbee")
