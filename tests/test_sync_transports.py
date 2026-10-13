@@ -688,6 +688,21 @@ def test_sync_set_modem_pins(serial_pair: SerialPair) -> None:
 @pytest.mark.skip_quirks(
     SerialQuirk.NO_RTS_CTS, SerialQuirk.NO_DTR_DSR, SerialQuirk.NO_RTS_DTR_READBACK
 )
+def test_sync_reconfigure_keeps_modem_pins(serial_pair: SerialPair) -> None:
+    """Test that reconfiguring does not restore the on-open DTR/RTS state."""
+
+    with Serial.from_url(serial_pair.left, baudrate=115200) as serial:
+        serial.set_modem_pins(dtr=False, rts=False)
+        serial.reconfigure_port(baudrate=9600)
+
+        modem_pins = serial.get_modem_pins()
+        assert modem_pins.dtr is PinState.LOW
+        assert modem_pins.rts is PinState.LOW
+
+
+@pytest.mark.skip_quirks(
+    SerialQuirk.NO_RTS_CTS, SerialQuirk.NO_DTR_DSR, SerialQuirk.NO_RTS_DTR_READBACK
+)
 def test_sync_deprecated_dtr_property(serial_pair: SerialPair) -> None:
     """Test DTR property (deprecated alias)."""
 

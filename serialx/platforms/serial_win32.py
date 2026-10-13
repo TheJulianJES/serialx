@@ -336,14 +336,18 @@ class Win32Serial(BaseSerial):
 
             SetCommState(self._handle, dcb)
 
-            # Driver-owned lines (RTS under rtscts, DTR under dsrdtr) are skipped
-            self.set_modem_pins(self._modem_pins_on_open())
-
             # Clear any errors
             ClearCommError(self._handle)
         except OSError:
             LOGGER.debug("Failed to configure port", exc_info=True)
             raise
+
+    def _configure_port_on_open(self) -> None:
+        """Configure the freshly opened port and set modem pins."""
+        super()._configure_port_on_open()
+
+        # Driver-owned lines (RTS under rtscts, DTR under dsrdtr) are skipped
+        self.set_modem_pins(self._modem_pins_on_open())
 
     def fileno(self) -> int:
         """Return the file descriptor."""
@@ -683,9 +687,7 @@ class Win32SerialTransport(BaseSerialTransport):
             self._extra["serial"] = self._serial
 
             await self._loop.run_in_executor(None, self._serial._setup_comm)
-            await self._loop.run_in_executor(
-                None, self._serial._reconfigure_port, self._serial._all_settings()
-            )
+            await self._loop.run_in_executor(None, self._serial._configure_port_on_open)
 
             if self._closing:
                 await self._loop.run_in_executor(None, self._serial.close)  # type: ignore[unreachable]

@@ -636,7 +636,7 @@ class BaseSerial(io.RawIOBase):
         self._broken = None
         try:
             self._open()
-            self._reconfigure_port(self._all_settings())
+            self._configure_port_on_open()
         except BaseException:
             self.close()
             raise
@@ -645,6 +645,14 @@ class BaseSerial(io.RawIOBase):
     def _open(self) -> None:
         """Open the serial port (platform-specific)."""
         raise NotImplementedError
+
+    def _configure_port_on_open(self) -> None:
+        """Apply all settings to a freshly opened port.
+
+        Drivers override this for setup that must only happen once per open, not on
+        every `_reconfigure_port`.
+        """
+        self._reconfigure_port(self._all_settings())
 
     def _all_settings(self) -> PortSettingsUpdate:
         return PortSettingsUpdate(

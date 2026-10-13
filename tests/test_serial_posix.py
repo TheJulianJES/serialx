@@ -9,7 +9,10 @@ if sys.platform in ("win32", "emscripten"):
 
 import array
 import errno
+import os
 import termios
+import time
+import tty
 from typing import Any
 from unittest.mock import patch
 
@@ -127,3 +130,65 @@ def test_termios_error_raised_as_os_error_bad_descriptor() -> None:
 
     assert raised.value.errno is not None
     assert raised.value.strerror is not None
+
+
+def test_reconfigure_port_keeps_buffers_and_modem_pins() -> None:
+    """Only opening applies the on-open modem pins and flushes, not reconfiguring."""
+    master, slave = os.openpty()
+    tty.setraw(master)
+
+    try:
+        with PosixSerial(os.ttyname(slave), baudrate=115200, read_timeout=1) as serial:
+            os.write(master, b"received before reconfigure")
+            time.sleep(0.1)
+
+            with (
+                patch.object(serial, "_set_modem_pins") as set_modem_pins,
+                patch("serialx.platforms.serial_posix.tcflush") as tcflush,
+            ):
+                serial.reconfigure_port(baudrate=9600)
+
+            set_modem_pins.assert_not_called()
+            tcflush.assert_not_called()
+            assert serial.readexactly(27) == b"received before reconfigure"
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_open_sets_modem_pins_then_flushes() -> None:
+    """Opening applies settings, then the on-open modem pins, then flushes."""
+    master, slave = os.openpty()
+    calls: list[tuple[object, ...]] = []
+
+    try:
+        serial = PosixSerial(os.ttyname(slave), baudrate=115200)
+
+        with (
+            patch.object(
+                serial,
+                "_reconfigure_port",
+                side_effect=lambda update: calls.append(("configure", update)),
+            ),
+            patch.object(
+                serial,
+                "_set_modem_pins",
+                side_effect=lambda pins: calls.append(("pins", pins.dtr, pins.rts)),
+            ),
+            patch(
+                "serialx.platforms.serial_posix.tcflush",
+                side_effect=lambda fd, queue: calls.append(("flush", queue)),
+            ),
+        ):
+            serial.open()
+
+        serial.close()
+    finally:
+        os.close(master)
+        os.close(slave)
+
+    assert calls == [
+        ("configure", serial._all_settings()),
+        ("pins", PinState.HIGH, PinState.HIGH),
+        ("flush", termios.TCIOFLUSH),
+    ]

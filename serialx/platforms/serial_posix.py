@@ -322,6 +322,11 @@ class PosixSerial(BaseSerial):
 
         self._after_configure_port()
 
+    def _configure_port_on_open(self) -> None:
+        """Configure the freshly opened port, set modem pins, and discard stale data."""
+        super()._configure_port_on_open()
+
+        assert self._fileno is not None
         self.set_modem_pins(self._modem_pins_on_open())
 
         # Flush input and output buffers to discard stale data
@@ -546,9 +551,7 @@ class PosixSerialTransport(DescriptorTransport):
 
         await asyncio.sleep(AFTER_OPEN_DELAY)
 
-        await self._loop.run_in_executor(
-            None, self._serial._reconfigure_port, self._serial._all_settings()
-        )
+        await self._loop.run_in_executor(None, self._serial._configure_port_on_open)
 
         if self.is_closing():
             # If we are closing, we should not call `connection_made`
