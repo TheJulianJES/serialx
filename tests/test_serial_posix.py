@@ -8,12 +8,15 @@ if sys.platform in ("win32", "emscripten"):
     pytest.skip("POSIX-only tests", allow_module_level=True)
 
 import array
+import asyncio
+import contextlib
 import errno
+import os
 import termios
 from typing import Any
 from unittest.mock import patch
 
-from serialx import ModemPins, PinState
+from serialx import ModemPins, PinState, create_serial_connection
 from serialx.platforms.serial_posix import PosixSerial
 
 
@@ -127,3 +130,59 @@ def test_termios_error_raised_as_os_error_bad_descriptor() -> None:
 
     assert raised.value.errno is not None
     assert raised.value.strerror is not None
+
+
+class DataProtocol(asyncio.Protocol):
+    """Protocol that records received data and connection loss."""
+
+    def __init__(self) -> None:
+        """Initialize the protocol."""
+        self.received = bytearray()
+        self.lost = asyncio.get_running_loop().create_future()
+
+    def data_received(self, data: bytes) -> None:
+        """Record received data."""
+        self.received += data
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        """Record connection loss."""
+        self.lost.set_result(exc)
+
+
+async def test_async_close_stops_reading_while_draining() -> None:
+    """No data is received after `close()`, even while the write buffer drains."""
+    master, slave = os.openpty()
+    os.set_blocking(master, False)
+
+    try:
+        transport, protocol = await create_serial_connection(
+            asyncio.get_running_loop(), DataProtocol, os.ttyname(slave), 115200
+        )
+        assert isinstance(protocol, DataProtocol)
+
+        # Nothing reads the PTY master, so this stays in the write buffer
+        transport.write(b"x" * 200_000)
+        assert transport.get_write_buffer_size() > 0
+
+        transport.close()
+        os.write(master, b"after close")
+        await asyncio.sleep(0.1)
+
+        assert transport.get_write_buffer_size() > 0
+        assert not protocol.received
+
+        # Let the write buffer drain so the transport finishes closing
+        for _ in range(5000):
+            if protocol.lost.done():
+                break
+            with contextlib.suppress(BlockingIOError):
+                while os.read(master, 65536):
+                    pass
+            await asyncio.sleep(0.001)
+
+        await asyncio.wait_for(transport.wait_closed(), 5)
+        assert await protocol.lost is None
+        assert not protocol.received
+    finally:
+        os.close(slave)
+        os.close(master)

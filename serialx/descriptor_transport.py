@@ -369,6 +369,8 @@ class DescriptorTransport(BaseSerialTransport):
             return
 
         if self._fileno is not None:
+            # No more data is received once closed, even while the write buffer drains
+            self._loop.remove_reader(self._fileno)
             self.write_eof()
         else:
             # The fd hasn't been opened yet. Just set the flag; _open() will
