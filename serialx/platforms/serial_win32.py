@@ -274,6 +274,20 @@ class Win32Serial(BaseSerial):
             PURGE_TXABORT | PURGE_RXABORT | PURGE_TXCLEAR | PURGE_RXCLEAR,
         )
 
+    def _current_dtr(self) -> PinState:
+        """Last DTR level written, or the on-open level if none was."""
+        if self._dtr_state is not PinState.UNDEFINED:
+            return self._dtr_state
+
+        return self._dtr_on_open
+
+    def _current_rts(self) -> PinState:
+        """Last RTS level written, or the on-open level if none was."""
+        if self._rts_state is not PinState.UNDEFINED:
+            return self._rts_state
+
+        return self._rts_on_open
+
     def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         """Configure the serial port settings."""
         assert self._handle is not None
@@ -298,17 +312,17 @@ class Win32Serial(BaseSerial):
 
             dcb.fBinary = 1  # Always True on Windows
 
-            # Flow Control
-            if update.rtscts is not None:
-                if update.rtscts:
-                    dcb.fRtsControl = RTS_CONTROL_HANDSHAKE
-                    dcb.fOutxCtsFlow = 1
-                elif self._rts_on_open is PinState.LOW:
-                    dcb.fRtsControl = RTS_CONTROL_DISABLE
-                    dcb.fOutxCtsFlow = 0
-                else:
-                    dcb.fRtsControl = RTS_CONTROL_ENABLE
-                    dcb.fOutxCtsFlow = 0
+            # Flow Control. Outside of handshake mode, the control mode carries the
+            # current DTR/RTS level so that changing it doesn't move the line.
+            if self._rtscts:
+                dcb.fRtsControl = RTS_CONTROL_HANDSHAKE
+                dcb.fOutxCtsFlow = 1
+            elif self._current_rts() is PinState.LOW:
+                dcb.fRtsControl = RTS_CONTROL_DISABLE
+                dcb.fOutxCtsFlow = 0
+            else:
+                dcb.fRtsControl = RTS_CONTROL_ENABLE
+                dcb.fOutxCtsFlow = 0
 
             if update.xonxoff is not None:
                 if update.xonxoff:
@@ -318,16 +332,15 @@ class Win32Serial(BaseSerial):
                     dcb.fOutX = 0
                     dcb.fInX = 0
 
-            if update.dsrdtr is not None:
-                if update.dsrdtr:
-                    dcb.fDtrControl = DTR_CONTROL_HANDSHAKE
-                    dcb.fOutxDsrFlow = 1
-                elif self._dtr_on_open is PinState.LOW:
-                    dcb.fDtrControl = DTR_CONTROL_DISABLE
-                    dcb.fOutxDsrFlow = 0
-                else:
-                    dcb.fDtrControl = DTR_CONTROL_ENABLE
-                    dcb.fOutxDsrFlow = 0
+            if self._dsrdtr:
+                dcb.fDtrControl = DTR_CONTROL_HANDSHAKE
+                dcb.fOutxDsrFlow = 1
+            elif self._current_dtr() is PinState.LOW:
+                dcb.fDtrControl = DTR_CONTROL_DISABLE
+                dcb.fOutxDsrFlow = 0
+            else:
+                dcb.fDtrControl = DTR_CONTROL_ENABLE
+                dcb.fOutxDsrFlow = 0
 
             dcb.fDsrSensitivity = 0
             dcb.fErrorChar = 0
@@ -344,6 +357,10 @@ class Win32Serial(BaseSerial):
 
     def _configure_port_on_open(self) -> None:
         """Configure the freshly opened port and set modem pins."""
+        # Levels written before a previous close don't apply to the new handle
+        self._dtr_state = PinState.UNDEFINED
+        self._rts_state = PinState.UNDEFINED
+
         super()._configure_port_on_open()
 
         # Driver-owned lines (RTS under rtscts, DTR under dsrdtr) are skipped
