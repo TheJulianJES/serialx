@@ -1,5 +1,6 @@
 """Tests for pyserial API compatibility shims."""
 
+import asyncio
 import sys
 from unittest.mock import Mock, PropertyMock, patch
 
@@ -31,6 +32,7 @@ from serialx import (
     SerialException,
     SerialPortInfo,
     StopBits,
+    create_serial_connection,
 )
 from serialx.common import PortSettingsUpdate
 from serialx.tools.list_ports import comports, grep
@@ -216,8 +218,9 @@ def test_compat_port_setter(serial_pair: SerialPair) -> None:
     left_path = Serial.from_url(serial_pair.left).path
     assert left_path is not None
 
-    # Created for the right port, then pointed at the left one before opening
+    # Created for the right port, then pointed at the left one
     left = Serial.from_url(serial_pair.right, baudrate=115200)
+    right_path = left.path
 
     if {SerialBackend.ESPHOME, SerialBackend.ESPHOME_HOST} & set(serial_pair.backends):
         # Settings parsed from the URI would be kept, so the path can't change
@@ -229,25 +232,55 @@ def test_compat_port_setter(serial_pair: SerialPair) -> None:
 
         return
 
+    # A closed port only changes its path
     with pytest.warns(DeprecationWarning, match="`port`"):
         left.port = left_path
 
+    assert not left.is_open
     assert left.path == left_path
     assert left.port == left.name == str(left_path)
 
-    with left, Serial.from_url(serial_pair.right, baudrate=115200) as right:
-        left.write(b"test")
-        assert right.readexactly(4) == b"test"
+    with pytest.warns(DeprecationWarning, match="`port`"):
+        left.port = right_path
 
-        # Like pyserial, an open port is closed and reopened, keeping its settings
+    # Like pyserial, an open port is closed and reopened on the new path, keeping
+    # its settings. The right port is free again once it is used by `right`.
+    with left:
         with pytest.warns(DeprecationWarning, match="`port`"):
             left.port = left_path
 
         assert left.is_open
+        assert left.path == left_path
         assert left.baudrate == 115200
 
-        left.write(b"again")
-        assert right.readexactly(5) == b"again"
+        with Serial.from_url(serial_pair.right, baudrate=115200) as right:
+            left.write(b"test")
+            assert right.readexactly(4) == b"test"
+
+
+async def test_compat_transport_port_setter_refused(serial_pair: SerialPair) -> None:
+    """The serial of an async transport can't be reopened behind its back."""
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        asyncio.Protocol,
+        serial_pair.left,
+        baudrate=115200,
+    )
+
+    try:
+        serial = transport.get_extra_info("serial")
+        path = serial.path
+
+        with (
+            pytest.warns(DeprecationWarning, match="`port`"),
+            pytest.raises(SerialException, match="transport"),
+        ):
+            serial.port = serial_pair.right
+
+        assert serial.path == path
+    finally:
+        transport.close()
+        await transport.wait_closed()
 
 
 def test_reconfigure_port_closed_raises() -> None:

@@ -594,6 +594,9 @@ class BaseSerial(io.RawIOBase):
         # Enter a "broken" state so that an error condition can persist
         self._broken: Exception | None = None
 
+        # Set once an async transport has connected with this instance
+        self._owned_by_transport = False
+
     def _mark_broken(self, exc: Exception) -> None:
         if self._broken is None:
             self._broken = exc
@@ -1137,6 +1140,12 @@ class BaseSerial(io.RawIOBase):
             stacklevel=2,
         )
 
+        # The transport shares the connection and would not notice the reopen
+        if self._owned_by_transport:
+            raise SerialException(
+                "The path of a transport's serial port cannot be changed"
+            )
+
         was_open = self.is_open
         self._set_path(value)
 
@@ -1541,6 +1550,9 @@ class BaseSerialTransport(asyncio.Transport):
             await self.wait_closed()
 
             raise
+
+        if self._serial is not None:
+            self._serial._owned_by_transport = True
 
     async def get_modem_pins(self) -> ModemPins:
         """Get modem control bits."""
