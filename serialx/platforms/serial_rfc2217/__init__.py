@@ -576,18 +576,18 @@ class RFC2217Serial(SocketSerial):
     ) -> Rfc2217Command:
         """Send a command and block until the matching server ack arrives.
 
-        ``timeout`` bounds the whole wait in seconds, ``None`` waits indefinitely.
+        ``timeout`` bounds sending and waiting in seconds, ``None`` waits indefinitely.
         """
         cmd_id = cmd.CMD_ID
 
-        with self._socket_timeout(timeout):
+        with measure_time() as get_elapsed, self._socket_timeout(timeout):
             self._send_command(cmd)
 
         LOGGER.debug("Waiting for %s ack...", type(cmd).__name__)
 
         # Serial data and notifications may keep arriving without the ack, so
-        # bound the wait as a whole instead of each read
-        remaining_timeout = timeout
+        # bound the operation as a whole instead of each socket call
+        remaining_timeout = None if timeout is None else timeout - get_elapsed()
         while True:
             pending = self._engine.pop_pending_rfc2217(cmd_id)
 
