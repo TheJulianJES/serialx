@@ -107,6 +107,8 @@ jobs:
   build-ser2net:
     name: Build ser2net
     runs-on: ubuntu-latest
+    outputs:
+      cache-key: ${{ steps.cache-ser2net.outputs.cache-primary-key }}
     env:
       SER2NET_VERSION: "4.6.7"
       GENSIO_VERSION: "3.0.2"
@@ -304,8 +306,9 @@ jobs:
       - name: Restore cached ser2net binary
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
+          fail-on-cache-miss: true
           path: ser2net
-          key: ser2net-4.6.7-gensio-3.0.2
+          key: ${{ needs.build-ser2net.outputs.cache-key }}
       - name: Install ser2net
         run: |
           sudo install -m 755 ser2net /usr/local/bin/ser2net
