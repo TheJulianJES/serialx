@@ -2,6 +2,8 @@
 
 import asyncio
 import sys
+import threading
+import time
 
 import pytest
 
@@ -28,6 +30,7 @@ from serialx.platforms.serial_rfc2217.types import (
 )
 
 from .common import HUB4COM_BINARY, SerialBackend, SerialPair, create_hub4com_pair
+from .rfc2217_server import create_rfc2217_server
 from .socket_relay import create_accept_then_close_server, create_silent_server
 
 
@@ -78,25 +81,100 @@ def test_flowcontrol_resume_roundtrip() -> None:
 
 
 @pytest.mark.parametrize(
-    "subneg",
+    ("subneg", "cmd_id"),
     [
-        # SET-CONTROL ack with an unassigned value
-        bytes([0xFF, 0xFA, 44, 105, 20, 0xFF, 0xF0]),
-        # SET-DATASIZE ack without a value
-        bytes([0xFF, 0xFA, 44, 102, 0xFF, 0xF0]),
+        (
+            bytes([0xFF, 0xFA, 44, 105, 20, 0xFF, 0xF0]),
+            Rfc2217CmdId.SET_CONTROL,
+        ),
+        (
+            bytes([0xFF, 0xFA, 44, 102, 0xFF, 0xF0]),
+            Rfc2217CmdId.SET_DATASIZE,
+        ),
     ],
+    ids=["set_control_unassigned_value", "set_datasize_empty"],
 )
-def test_malformed_server_subneg_ignored(subneg: bytes) -> None:
-    """A malformed server response is dropped without losing surrounding data."""
+def test_malformed_server_response(subneg: bytes, cmd_id: Rfc2217CmdId) -> None:
+    """A malformed response fails its request without losing surrounding data."""
     engine = Rfc2217()
 
     assert engine.feed(b"AB" + subneg + b"CD") == (b"AB" + b"CD", [])
     assert engine.feed(b"EF") == (b"EF", [])
 
-    # Later commands are still parsed
+    with pytest.raises(SerialException, match=cmd_id.name):
+        engine.pop_pending_rfc2217(cmd_id)
+
+    # Later responses are still parsed
     baudrate_ack = bytes([0xFF, 0xFA, 44, 101]) + (115200).to_bytes(4, "big")
     assert engine.feed(baudrate_ack + bytes([0xFF, 0xF0])) == (b"", [])
     assert engine.pop_pending_rfc2217(Rfc2217CmdId.SET_BAUDRATE) is not None
+
+
+def test_sync_malformed_ack_fails_request() -> None:
+    """A malformed ack fails its request, the connection keeps working."""
+    with create_rfc2217_server() as server:
+        with Serial.from_url(server.url, baudrate=115200, read_timeout=2) as serial:
+            server.drop_acks(Rfc2217CmdId.SET_CONTROL)
+            num_commands = len(server.commands)
+
+            def reply_malformed() -> None:
+                while len(server.commands) == num_commands:
+                    time.sleep(0.01)
+
+                server.send(b"AB")
+                server.send_ack(Rfc2217CmdId.SET_CONTROL, bytes([20]))
+                server.send(b"CD")
+
+            thread = threading.Thread(target=reply_malformed, daemon=True)
+            thread.start()
+
+            with pytest.raises(SerialException, match="SET_CONTROL"):
+                serial.set_modem_pins(dtr=True)
+
+            thread.join()
+
+            serial.set_modem_pins(dtr=False)
+            assert serial.read(4) == b"ABCD"
+
+
+async def test_async_malformed_ack_fails_request() -> None:
+    """A malformed ack fails its request, the connection keeps working."""
+    received = bytearray()
+
+    class Protocol(asyncio.Protocol):
+        def data_received(self, data: bytes) -> None:
+            received.extend(data)
+
+    with create_rfc2217_server() as server:
+        transport, _ = await create_serial_connection(
+            asyncio.get_running_loop(), Protocol, url=server.url, baudrate=115200
+        )
+
+        try:
+            server.drop_acks(Rfc2217CmdId.SET_CONTROL)
+            num_commands = len(server.commands)
+            request = asyncio.ensure_future(transport.set_modem_pins(dtr=True))
+
+            while len(server.commands) == num_commands:
+                await asyncio.sleep(0.01)
+
+            server.send(b"AB")
+            server.send_ack(Rfc2217CmdId.SET_CONTROL, bytes([20]))
+            server.send(b"CD")
+
+            with pytest.raises(SerialException, match="SET_CONTROL"):
+                await request
+
+            await transport.set_modem_pins(dtr=False)
+            assert not transport.is_closing()
+
+            while len(received) < 4:
+                await asyncio.sleep(0.01)
+
+            assert received == b"ABCD"
+        finally:
+            transport.close()
+            await transport.wait_closed()
 
 
 def test_invalid_byte_size_rejected_before_sending() -> None:

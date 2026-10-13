@@ -103,6 +103,14 @@ class TelnetParserState(IntEnum):
     SUBNEG_IAC = 5  # IAC seen inside subnegotiation
 
 
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class UnparsedRfc2217Response:
+    """Server response for a known command whose payload could not be decoded."""
+
+    cmd_id: Rfc2217CmdId
+    payload: bytes
+
+
 class TelnetParser:
     """State machine that separates a telnet byte stream into data and commands."""
 
@@ -113,10 +121,14 @@ class TelnetParser:
         self._subneg_option: int = 0
         self._subneg_buffer = bytearray()
 
-    def feed(self, data: bytes) -> list[bytes | TelnetCommand | Rfc2217Command]:
+    def feed(
+        self, data: bytes
+    ) -> list[bytes | TelnetCommand | Rfc2217Command | UnparsedRfc2217Response]:
         """Process raw bytes and return data chunks and commands."""
         LOGGER.debug("Parser feed: %d bytes: %s", len(data), data.hex(" "))
-        result: list[bytes | TelnetCommand | Rfc2217Command] = []
+        result: list[
+            bytes | TelnetCommand | Rfc2217Command | UnparsedRfc2217Response
+        ] = []
         data_buf = bytearray()
 
         for byte in data:
@@ -190,7 +202,7 @@ class TelnetParser:
 
         return result
 
-    def _finish_subneg(self) -> Rfc2217Command | None:
+    def _finish_subneg(self) -> Rfc2217Command | UnparsedRfc2217Response | None:
         """Parse a completed subnegotiation."""
         option = self._subneg_option
         payload = bytes(self._subneg_buffer)
@@ -226,11 +238,11 @@ class TelnetParser:
         try:
             cmd = cmd_cls.from_bytes(cmd_payload)
         except (ValueError, IndexError):
-            # A single bad server response shouldn't take down the connection
+            # Let the request this responds to fail instead of the whole connection
             LOGGER.warning(
-                "Ignoring malformed RFC 2217 %s: %s", cmd_id.name, cmd_payload.hex(" ")
+                "Malformed RFC 2217 %s response: %s", cmd_id.name, cmd_payload.hex(" ")
             )
-            return None
+            return UnparsedRfc2217Response(cmd_id=cmd_id, payload=cmd_payload)
 
         LOGGER.debug("Parsed RFC2217 %s", cmd)
         return cmd
@@ -250,7 +262,9 @@ class Rfc2217:
         """Initialize parser state and protocol bookkeeping."""
         self._parser = TelnetParser()
         self._pending_telnet: list[TelnetCommand] = []
-        self._pending_rfc2217: dict[Rfc2217CmdId, Rfc2217Command] = {}
+        self._pending_rfc2217: dict[
+            Rfc2217CmdId, Rfc2217Command | UnparsedRfc2217Response
+        ] = {}
         self._modemstate = ModemStateFlag(0)
         self._negotiated = False
 
@@ -287,8 +301,19 @@ class Rfc2217:
         return None
 
     def pop_pending_rfc2217(self, cmd_id: Rfc2217CmdId) -> Rfc2217Command | None:
-        """Pop a pending RFC2217 command of the given type, if present."""
-        return self._pending_rfc2217.pop(cmd_id, None)
+        """Pop a pending RFC2217 command of the given type, if present.
+
+        Raises `SerialException` if the server's response could not be decoded.
+        """
+        pending = self._pending_rfc2217.pop(cmd_id, None)
+
+        if isinstance(pending, UnparsedRfc2217Response):
+            raise SerialException(
+                f"Invalid RFC 2217 {cmd_id.name} response from server:"
+                f" {pending.payload.hex(' ') or '(empty)'}"
+            )
+
+        return pending
 
     def build_port_config_commands(
         self, update: PortSettingsUpdate
@@ -379,7 +404,8 @@ class Rfc2217:
             return DontCmd(option=cmd.option)
 
     def _dispatch_parser_items(
-        self, items: list[bytes | TelnetCommand | Rfc2217Command]
+        self,
+        items: list[bytes | TelnetCommand | Rfc2217Command | UnparsedRfc2217Response],
     ) -> tuple[bytes, list[TelnetCommand]]:
         """Update protocol state from parsed items and produce responses."""
         responses: list[TelnetCommand] = []
@@ -407,6 +433,8 @@ class Rfc2217:
             elif isinstance(item, Rfc2217Command):
                 LOGGER.debug("RX rfc2217 cmd: %r", item)
                 self._pending_rfc2217[item.CMD_ID] = item
+            elif isinstance(item, UnparsedRfc2217Response):
+                self._pending_rfc2217[item.cmd_id] = item
             else:
                 LOGGER.debug("RX telnet cmd: %r", item)
                 self._pending_telnet.append(item)
@@ -959,7 +987,13 @@ class RFC2217SerialTransport(BaseSerialTransport):
                 self._rfc2217_waiters.pop(rfc_cmd_id, None)
                 continue
 
-            rfc_pending = self._serial._engine.pop_pending_rfc2217(rfc_cmd_id)
+            try:
+                rfc_pending = self._serial._engine.pop_pending_rfc2217(rfc_cmd_id)
+            except SerialException as exc:
+                self._rfc2217_waiters.pop(rfc_cmd_id, None)
+                rfc_waiter.set_exception(exc)
+                continue
+
             if rfc_pending is not None:
                 self._rfc2217_waiters.pop(rfc_cmd_id, None)
                 rfc_waiter.set_result(rfc_pending)
