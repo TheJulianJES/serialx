@@ -31,6 +31,7 @@ from serialx.common import (
     SerialPortInfo,
     UnknownUriScheme,
     get_uri_handler,
+    measure_time,
     route_backend_kwargs,
 )
 
@@ -239,8 +240,34 @@ def test_read_until_returns_partial_on_timeout() -> None:
     """`read_until` returns the bytes read so far instead of raising on timeout."""
     serial = _SlowReadSerial([b"a", b"b"], read_timeout=0.05)
 
-    assert serial.read_until(b"\n") == b"ab"
-    assert serial.timeouts == [0.05, 0.0, 0.0]
+    # The first read used up the timeout, so `read_until` stops after it
+    assert serial.read_until(b"\n") == b"a"
+    assert serial.timeouts == [0.05]
+
+    # A zero timeout drains what is already buffered, then returns
+    assert serial.read_until(b"\n", timeout=0) == b"b"
+    assert serial.timeouts == [0.05, 0, 0]
+
+
+class _StreamingSerial(_StubSerial):
+    """Always has data, like a sender that never stops."""
+
+    def _readinto(self, b: Any, *, timeout: float | None) -> int:  # type:ignore[override]
+        time.sleep(0.01)
+        memoryview(b)[:1] = b"x"
+        return 1
+
+
+def test_read_until_stops_at_deadline_while_data_arrives() -> None:
+    """The timeout bounds the whole `read_until` call, not each read."""
+    serial = _StreamingSerial("/dev/null", do_not_open=True, read_timeout=0.1)
+
+    with measure_time() as elapsed:
+        # `size` only bounds the test if the deadline is ignored
+        result = serial.read_until(b"\n", size=100)
+
+    assert elapsed() == pytest.approx(0.1, abs=0.1)
+    assert 0 < len(result) <= 10
 
 
 def test_check_broken_raises_fresh_instance() -> None:

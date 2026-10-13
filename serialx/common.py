@@ -969,7 +969,8 @@ class BaseSerial(io.RawIOBase):
         buffer = bytearray()
         byte = bytearray(1)
         expected_len = len(expected)
-        remaining_timeout = self.read_timeout if timeout is None else timeout
+        start_timeout = self.read_timeout if timeout is None else timeout
+        remaining_timeout = start_timeout
 
         while True:
             with measure_time() as get_elapsed:
@@ -988,6 +989,11 @@ class BaseSerial(io.RawIOBase):
                 break
 
             if size is not None and len(buffer) >= size:
+                break
+
+            # Like pyserial, the timeout bounds the whole call even if data keeps
+            # arriving. A zero timeout drains what is already buffered instead.
+            if start_timeout and remaining_timeout == 0:
                 break
 
         return bytes(buffer)
