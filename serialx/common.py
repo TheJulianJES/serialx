@@ -898,6 +898,15 @@ class BaseSerial(io.RawIOBase):
         """Get the parity."""
         return self._parity
 
+    @parity.setter
+    def parity(self, value: Parity | str) -> None:
+        """Set the parity (deprecated)."""
+        self._set_deprecated(
+            name="parity",
+            kwarg="parity",
+            update=PortSettingsUpdate(parity=Parity(value)),
+        )
+
     @property
     def byte_size(self) -> int:
         """Get the byte size."""
@@ -907,6 +916,51 @@ class BaseSerial(io.RawIOBase):
     def stopbits(self) -> StopBits:
         """Get the number of stop bits."""
         return self._stopbits
+
+    @stopbits.setter
+    def stopbits(self, value: StopBits | int | float) -> None:
+        """Set the number of stop bits (deprecated)."""
+        self._set_deprecated(
+            name="stopbits",
+            kwarg="stopbits",
+            update=PortSettingsUpdate(stopbits=StopBits(value)),
+        )
+
+    @property
+    def xonxoff(self) -> bool:
+        """Get the software flow control setting."""
+        return self._xonxoff
+
+    @xonxoff.setter
+    def xonxoff(self, value: bool) -> None:
+        """Set software flow control (deprecated)."""
+        self._set_deprecated(
+            name="xonxoff", kwarg="xonxoff", update=PortSettingsUpdate(xonxoff=value)
+        )
+
+    @property
+    def rtscts(self) -> bool:
+        """Get the RTS/CTS hardware flow control setting."""
+        return self._rtscts
+
+    @rtscts.setter
+    def rtscts(self, value: bool) -> None:
+        """Set RTS/CTS hardware flow control (deprecated)."""
+        self._set_deprecated(
+            name="rtscts", kwarg="rtscts", update=PortSettingsUpdate(rtscts=value)
+        )
+
+    @property
+    def dsrdtr(self) -> bool:
+        """Get the DSR/DTR hardware flow control setting."""
+        return self._dsrdtr
+
+    @dsrdtr.setter
+    def dsrdtr(self, value: bool) -> None:
+        """Set DSR/DTR hardware flow control (deprecated)."""
+        self._set_deprecated(
+            name="dsrdtr", kwarg="dsrdtr", update=PortSettingsUpdate(dsrdtr=value)
+        )
 
     @property
     def dtr_on_open(self) -> PinState:
@@ -1089,6 +1143,15 @@ class BaseSerial(io.RawIOBase):
 
         """
         return self.byte_size
+
+    @bytesize.setter
+    def bytesize(self, value: int) -> None:
+        """Set the byte size (deprecated)."""
+        self._set_deprecated(
+            name="bytesize",
+            kwarg="byte_size",
+            update=PortSettingsUpdate(byte_size=value),
+        )
 
     @property
     def data_bits(self) -> int:

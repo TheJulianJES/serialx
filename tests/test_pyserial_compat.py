@@ -1,6 +1,7 @@
 """Tests for pyserial API compatibility shims."""
 
 import sys
+from unittest.mock import PropertyMock, patch
 
 import pytest
 
@@ -29,7 +30,9 @@ from serialx import (
     Serial,
     SerialException,
     SerialPortInfo,
+    StopBits,
 )
+from serialx.common import PortSettingsUpdate
 from serialx.tools.list_ports import comports, grep
 from serialx.tools.list_ports_common import ListPortInfo
 from tests.common import SerialPair
@@ -148,6 +151,38 @@ def test_compat_stop_bits(serial_pair: SerialPair) -> None:
 
     with pytest.raises(ValueError):
         s.stop_bits = 3
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "update"),
+    [
+        ("parity", PARITY_EVEN, PortSettingsUpdate(parity=Parity.EVEN)),
+        ("bytesize", SEVENBITS, PortSettingsUpdate(byte_size=7)),
+        ("stopbits", STOPBITS_TWO, PortSettingsUpdate(stopbits=StopBits.TWO)),
+        ("xonxoff", True, PortSettingsUpdate(xonxoff=True)),
+        ("rtscts", True, PortSettingsUpdate(rtscts=True)),
+        ("dsrdtr", True, PortSettingsUpdate(dsrdtr=True)),
+    ],
+)
+def test_compat_settings_setters(
+    name: str, value: object, update: PortSettingsUpdate
+) -> None:
+    """pyserial-style setters store the setting and apply it to an open port."""
+    s = Serial()
+    with pytest.warns(DeprecationWarning, match="closed port"):
+        setattr(s, name, value)
+    assert getattr(s, name) == value
+
+    s = Serial()
+    with (
+        patch.object(type(s), "is_open", new_callable=PropertyMock, return_value=True),
+        patch.object(s, "_reconfigure_port") as reconfigure,
+        pytest.warns(DeprecationWarning, match="reconfigure_port"),
+    ):
+        setattr(s, name, value)
+
+    reconfigure.assert_called_once_with(update)
+    assert getattr(s, name) == value
 
 
 def test_reconfigure_port_closed_raises() -> None:
