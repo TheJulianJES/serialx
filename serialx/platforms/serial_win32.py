@@ -797,12 +797,6 @@ class Win32SerialTransport(BaseSerialTransport):
         if self._internal_transport is not None:
             self._internal_transport.resume_reading()
 
-    def set_protocol(self, protocol: asyncio.Protocol) -> None:  # type: ignore[override]
-        """Set the protocol."""
-        self._protocol = protocol
-        if self._internal_transport is not None:
-            self._internal_transport.set_protocol(protocol)
-
     async def _flush(self) -> None:
         """Flush write buffers, waiting until all data is written, internal."""
         assert self._serial is not None

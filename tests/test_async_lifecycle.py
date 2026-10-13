@@ -246,6 +246,32 @@ async def test_lifecycle_close_close_one_connection_lost(
     protocol.assert_clean()
 
 
+async def test_lifecycle_set_protocol_connection_lost_once(
+    serial_pair: SerialPair,
+) -> None:
+    """After set_protocol(), close() calls the new protocol's connection_lost once."""
+    loop = asyncio.get_running_loop()
+    old_protocol = RecordingProtocol()
+    new_protocol = RecordingProtocol()
+
+    transport, _ = await create_serial_connection(
+        loop, lambda: old_protocol, serial_pair.left, baudrate=115200
+    )
+
+    # The new protocol takes over an already made connection
+    new_protocol.connection_made(transport)
+    transport.set_protocol(new_protocol)
+    assert transport.get_protocol() is new_protocol
+
+    transport.close()
+    await transport.wait_closed()
+
+    old_protocol.assert_state(ProtocolState.MADE)
+    new_protocol.assert_state(ProtocolState.LOST)
+    old_protocol.assert_clean()
+    new_protocol.assert_clean()
+
+
 async def test_lifecycle_abort_after_close_one_connection_lost(
     serial_pair: SerialPair,
 ) -> None:
