@@ -14,7 +14,15 @@ if sys.platform == "emscripten":
         allow_module_level=True,
     )
 
-from serialx import ModemPins, Parity, PinState, Serial, StopBits, serial_for_url
+from serialx import (
+    ModemPins,
+    Parity,
+    PinState,
+    Serial,
+    SerialException,
+    StopBits,
+    serial_for_url,
+)
 from tests.common import (
     SerialBackend,
     SerialPair,
@@ -555,6 +563,30 @@ def test_sync_context_manager_multiple_times(serial_pair: SerialPair) -> None:
     with left, right:
         left.write(b"test2")
         assert right.readexactly(5) == b"test2"
+
+
+def test_sync_open_already_open(serial_pair: SerialPair) -> None:
+    """Test that opening an open port raises without closing it."""
+    left = Serial.from_url(serial_pair.left, baudrate=115200)
+    right = Serial.from_url(serial_pair.right, baudrate=115200)
+    left.open()
+    right.open()
+
+    try:
+        with pytest.raises(SerialException, match="already open"):
+            left.open()
+
+        assert left.is_open
+
+        # Like pyserial, the context manager uses an already open port as-is
+        with left:
+            left.write(b"test")
+            assert right.readexactly(4) == b"test"
+
+        assert not left.is_open
+    finally:
+        left.close()
+        right.close()
 
 
 @pytest.mark.skip_quirks(SerialQuirk.NO_RESET_READ_BUFFER)

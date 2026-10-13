@@ -232,9 +232,6 @@ class Win32Serial(BaseSerial):
         """Open the serial port."""
         LOGGER.debug("Opening serial port %r", self._path)
 
-        if self._handle is not None:
-            raise ValueError("Serial port is already open")
-
         assert self._path is not None
         path = _normalize_windows_port_path(self._path)
 

@@ -115,9 +115,6 @@ class PosixSerial(BaseSerial):
         """Open the serial port."""
         LOGGER.debug("Opening serial port %r", self._path)
 
-        if self._fileno is not None:
-            raise ValueError("Serial port is already open")
-
         assert self._path is not None
         self._fileno = os.open(self._path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         self._auto_close = True

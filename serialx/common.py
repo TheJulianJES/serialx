@@ -633,6 +633,10 @@ class BaseSerial(io.RawIOBase):
     @maybe_wrap_exceptions
     def open(self) -> None:
         """Open the serial port."""
+        # Checked outside of the `try`, the cleanup would close the open port
+        if self.is_open:
+            raise SerialException("Serial port is already open")
+
         self._broken = None
         try:
             self._open()
@@ -991,8 +995,10 @@ class BaseSerial(io.RawIOBase):
         return bytes(buffer)
 
     def __enter__(self) -> Self:
-        """Enter context manager."""
-        self.open()
+        """Enter context manager, opening the port if it is not open yet."""
+        if not self.is_open:
+            self.open()
+
         return self
 
     def __exit__(
