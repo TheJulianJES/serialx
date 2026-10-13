@@ -175,8 +175,11 @@ async def test_async_malformed_ack_fails_request() -> None:
             await transport.set_modem_pins(dtr=False)
             assert not transport.is_closing()
 
-            while len(received) < 4:
-                await asyncio.sleep(0.01)
+            async def data_received() -> None:
+                while len(received) < 4:
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(data_received(), timeout=5)
 
             assert received == b"ABCD"
         finally:
