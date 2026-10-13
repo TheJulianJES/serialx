@@ -63,7 +63,7 @@ class DescriptorTransport(BaseSerialTransport):
         self._buffer = bytearray()
         self._conn_lost_count = 0
         self._paused = False
-        self._empty_waiter: asyncio.Future[None] | None = None
+        self._empty_waiters: list[asyncio.Future[None]] = []
         if extra is not None:
             self._extra.update(extra)
 
@@ -240,16 +240,25 @@ class DescriptorTransport(BaseSerialTransport):
 
     def _make_empty_waiter(self) -> asyncio.Future[None]:
         """Create a future that resolves when the write buffer is empty."""
-        if self._empty_waiter is not None:
-            raise RuntimeError("Empty waiter is already set")
-        self._empty_waiter = self._loop.create_future()
-        if not self._buffer:
-            self._empty_waiter.set_result(None)
-        return self._empty_waiter
+        waiter = self._loop.create_future()
+        if self._buffer:
+            self._empty_waiters.append(waiter)
+        else:
+            waiter.set_result(None)
+        return waiter
 
-    def _reset_empty_waiter(self) -> None:
-        """Reset the empty waiter."""
-        self._empty_waiter = None
+    def _wake_empty_waiters(self, exc: BaseException | None = None) -> None:
+        """Resolve all pending empty waiters, failing them if `exc` is set."""
+        waiters, self._empty_waiters = self._empty_waiters, []
+
+        for waiter in waiters:
+            # Waiters of cancelled flushes are already done
+            if waiter.done():
+                continue
+            if exc is None:
+                waiter.set_result(None)
+            else:
+                waiter.set_exception(exc)
 
     def write(self, data: bytes | bytearray | memoryview) -> None:
         """Write data to the file descriptor."""
@@ -319,8 +328,7 @@ class DescriptorTransport(BaseSerialTransport):
             # Remove writer here, _fatal_error() doesn't it
             # because _buffer is empty.
             self._loop.remove_writer(self._fileno)
-            if self._empty_waiter is not None:
-                self._empty_waiter.set_exception(exc)
+            self._wake_empty_waiters(exc)
             self._fatal_error(
                 exc,  # type: ignore[arg-type]
                 f"Fatal write error in {self.transport_name} transport",
@@ -329,8 +337,7 @@ class DescriptorTransport(BaseSerialTransport):
             if n == len(self._buffer):
                 self._buffer.clear()
                 self._loop.remove_writer(self._fileno)
-                if self._empty_waiter is not None:
-                    self._empty_waiter.set_result(None)
+                self._wake_empty_waiters()
                 self._maybe_resume_protocol()  # May append to buffer.
                 if self._closing:
                     self._loop.remove_reader(self._fileno)
@@ -422,6 +429,8 @@ class DescriptorTransport(BaseSerialTransport):
             self._buffer.clear()
             self._loop.remove_reader(self._fileno)
 
+        # Buffered data was discarded, nothing is left to wait for
+        self._wake_empty_waiters(exc)
         self._maybe_background_close(exc)
 
     def _maybe_background_close(self, exc: Exception | None) -> None:

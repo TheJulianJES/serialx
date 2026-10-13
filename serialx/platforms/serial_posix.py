@@ -562,15 +562,16 @@ class PosixSerialTransport(DescriptorTransport):
         """Flush write buffers, waiting until all data is written, internal."""
         assert self._serial is not None
 
-        try:
-            # Wait for internal buffer to drain
-            await self._make_empty_waiter()
+        # Wait for internal buffer to drain
+        await self._make_empty_waiter()
 
-            # Wait for hardware buffer to flush (with timeout)
-            async with asyncio_timeout(FLUSH_TIMEOUT):
-                await self._loop.run_in_executor(None, self._serial.flush)
-        finally:
-            self._reset_empty_waiter()
+        # The background close task owns the file descriptor now
+        if self._closing:
+            return
+
+        # Wait for hardware buffer to flush (with timeout)
+        async with asyncio_timeout(FLUSH_TIMEOUT):
+            await self._loop.run_in_executor(None, self._serial.flush)
 
     async def _get_modem_pins(self) -> ModemPins:
         """Get modem control bits, internal."""
