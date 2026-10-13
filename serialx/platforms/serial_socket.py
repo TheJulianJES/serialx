@@ -46,22 +46,25 @@ class SocketSerial(BaseSerial):
         """Initialize socket serial port."""
         super().__init__(*args, **kwargs)
 
+        self._host, self._port = self._parse_path()
+        self._connect_timeout = connect_timeout
+
+        self._socket: socket.socket | None = None
+
+    def _parse_path(self) -> tuple[str, int]:
+        """Get the host and port from the socket URI."""
         parsed = urllib.parse.urlparse(str(self._path))
         if parsed.hostname is None or parsed.port is None:
             raise ValueError(
                 f"Invalid socket URI, expected both host and port: {self._path}"
             )
 
-        self._host = parsed.hostname
-        self._port = parsed.port
-        self._connect_timeout = connect_timeout
-
-        self._socket: socket.socket | None = None
+        return parsed.hostname, parsed.port
 
     def _open(self) -> None:
         """Open the socket connection."""
-        assert self._host is not None
-        assert self._port is not None
+        # The path can change while the port is closed
+        self._host, self._port = self._parse_path()
 
         self._socket = socket.create_connection(
             (self._host, self._port), timeout=self._connect_timeout

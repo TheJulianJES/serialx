@@ -1114,8 +1114,33 @@ class BaseSerial(io.RawIOBase):
         """
         return str(self.path) if self.path is not None else None
 
+    @port.setter
+    def port(self, value: str | Path | None) -> None:
+        """Set the path of a closed port (deprecated)."""
+        if self.is_open:
+            raise SerialException(
+                "Cannot change the path of an open port, close it first"
+            )
+
+        warnings.warn(
+            "Setting `port` is deprecated, pass `path` to the constructor instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self._path = value
+
     @property
     def portstr(self) -> str | None:
+        """Deprecated alias for `path`.
+
+        Warning:
+            Deprecated, use `path` instead.
+
+        """
+        return str(self.path) if self.path is not None else None
+
+    @property
+    def name(self) -> str | None:
         """Deprecated alias for `path`.
 
         Warning:

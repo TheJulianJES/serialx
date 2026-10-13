@@ -201,6 +201,27 @@ def test_compat_write_timeout_setter() -> None:
     assert s.write_timeout == 1.5
 
 
+def test_compat_port_setter(serial_pair: SerialPair) -> None:
+    """Setting `port` on a closed port changes the port that `open()` uses."""
+    left_path = Serial.from_url(serial_pair.left).path
+    assert left_path is not None
+
+    # Created for the right port, then pointed at the left one before opening
+    left = Serial.from_url(serial_pair.right, baudrate=115200)
+    with pytest.warns(DeprecationWarning, match="`port`"):
+        left.port = left_path
+
+    assert left.path == left_path
+    assert left.port == left.name == str(left_path)
+
+    with left, Serial.from_url(serial_pair.right, baudrate=115200) as right:
+        left.write(b"test")
+        assert right.readexactly(4) == b"test"
+
+        with pytest.raises(SerialException, match="open port"):
+            left.port = left_path
+
+
 def test_reconfigure_port_closed_raises() -> None:
     """Settings for a closed port belong in the constructor."""
     s = Serial()
