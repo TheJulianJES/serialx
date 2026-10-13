@@ -95,18 +95,22 @@ async def test_pyodide_non_fatal_read_error_keeps_reading(error: str) -> None:
     finally:
         left_writer.close()
         right_writer.close()
-        await left_writer.wait_closed()
-        await right_writer.wait_closed()
+        await asyncio.wait_for(left_writer.wait_closed(), 1)
+        await asyncio.wait_for(right_writer.wait_closed(), 1)
 
 
-async def test_pyodide_disconnect_closes_transport() -> None:
-    """A fatal read error (unplugged device) closes the transport with an error."""
+@pytest.mark.parametrize("error", ["disconnect", "UnknownError"])
+async def test_pyodide_fatal_read_error_closes_transport(error: str) -> None:
+    """A disconnect or any other read error closes the transport with an error."""
     left_port, _ = js.create_fake_serial_pair()
     left_reader, left_writer = await open_serial_connection(
         url="pyodide://left", baudrate=115200, js_port=left_port
     )
 
-    left_port.disconnect()
+    if error == "disconnect":
+        left_port.disconnect()
+    else:
+        left_port.errorReadable(error)
     await asyncio.wait_for(left_writer.transport.wait_closed(), 1)
     assert left_writer.transport.is_closing()
 

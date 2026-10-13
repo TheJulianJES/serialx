@@ -83,7 +83,8 @@ class JsSerialPort(Protocol):
     """`SerialPort`."""
 
     # Per spec, both streams are nullable: they are `null` outside the window
-    # where the port is open and healthy.
+    # where the port is open and healthy. Pyodide converts `null` to the falsy
+    # `pyodide.ffi.jsnull`, not `None`, so check them for truthiness.
     readable: JsReadableStream | None
     writable: JsWritableStream | None
 

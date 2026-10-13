@@ -79,6 +79,12 @@ _STOPBITS_MAP: dict[StopBits, JsStopBits] = {
     StopBits.TWO: 2,
 }
 
+# Read errors that only end the current `port.readable` stream, the port then hands
+# out a new one
+_LINE_ERRORS = frozenset(
+    {"BreakError", "FramingError", "ParityError", "BufferOverrunError"}
+)
+
 
 @final
 class ExitSentinel:
@@ -337,22 +343,23 @@ class PyodideSerialTransport(BaseSerialTransport):
                 result = await self._js_reader.read()
             except Exception as e:
                 assert self._js_port is not None
+                # JS `null` is the falsy `jsnull` under Pyodide, not `None`
                 readable = self._js_port.readable
 
-                # A disconnect leaves `readable` null. Break, framing, parity, and
-                # buffer overrun errors only end the current stream: the port hands
-                # out a new one and we can keep reading.
-                if readable is None:
-                    _LOGGER.debug("Fatal error reading from serial port: %s", e)
-                    exc = OSError(errno.EIO, f"Error reading from serial port: {e}")
-                    exc.__cause__ = e
-                    self._cleanup(exc)
-                    return
+                # Keep reading from a new stream after a line error, any other error
+                # (e.g. a disconnect) is fatal
+                if getattr(e, "name", None) in _LINE_ERRORS and readable:
+                    _LOGGER.debug("Error reading from serial port, continuing: %s", e)
+                    self._js_reader.releaseLock()
+                    self._js_reader = readable.getReader()
+                    continue
 
-                _LOGGER.warning("Error reading from serial port, continuing: %s", e)
-                self._js_reader.releaseLock()
-                self._js_reader = readable.getReader()
-                continue
+                _LOGGER.debug("Fatal error reading from serial port: %s", e)
+                exc = OSError(errno.EIO, f"Error reading from serial port: {e}")
+                exc.__cause__ = e
+                self._mark_broken(exc)
+                self._cleanup(exc)
+                return
 
             if result.done:
                 self._cleanup(RuntimeError("Other side has closed"))

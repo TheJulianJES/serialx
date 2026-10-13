@@ -159,3 +159,19 @@ test("disconnecting errors the readable and leaves it null", async () => {
   await a.close();
   await b.close();
 });
+
+test("disconnecting rejects a write stalled on hardware flow control", async () => {
+  const [a, b] = createFakeSerialPair();
+  await a.open({ baudRate: 115200, flowControl: "hardware" });
+  await b.open({ baudRate: 115200 });
+  const writer = a.writable!.getWriter();
+
+  const stalled = writer.write(new Uint8Array([1]));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  a.disconnect();
+  await expect(stalled).rejects.toMatchObject({ name: "NetworkError" });
+
+  writer.releaseLock();
+  await a.close();
+  await b.close();
+});

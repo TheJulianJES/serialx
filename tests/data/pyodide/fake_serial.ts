@@ -61,7 +61,7 @@ export class FakeSerialPort {
     this.#writable = new WritableStream<Uint8Array>({
       write: async (chunk) => {
         const bytes = chunk.slice();
-        while (this.#open && this.#ctsHeld()) {
+        while (this.#open && !this.#fatal && this.#ctsHeld()) {
           await new Promise<void>((resolve) => this.#ctsWaiters.push(resolve));
         }
         if (!this.#open) return;
@@ -107,6 +107,7 @@ export class FakeSerialPort {
   disconnect(): void {
     this.errorReadable("NetworkError");
     this.#fatal = true;
+    this.#wakeCtsWaiters();
   }
 
   async setSignals(signals: SerialOutputSignals = {}): Promise<void> {
