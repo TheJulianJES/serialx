@@ -161,7 +161,6 @@ class PyodideSerialTransport(BaseSerialTransport):
 
         self._write_queue: asyncio.Queue[bytes | type[ExitSentinel]] = asyncio.Queue()
         self._write_buffer_size = 0
-        self._write_exc: Exception | None = None
         self._closing = False
         self._close_port_task: asyncio.Task[None] | None = None
 
@@ -329,7 +328,7 @@ class PyodideSerialTransport(BaseSerialTransport):
                 await self._js_writer.write(js.Uint8Array.new(chunk))
             except Exception as e:
                 _LOGGER.exception("Error writing to serial port")
-                self._write_exc = e
+                self._mark_broken(e)
                 self._cleanup(e)
                 break
             finally:
@@ -402,9 +401,7 @@ class PyodideSerialTransport(BaseSerialTransport):
     async def _flush(self) -> None:
         """Flush write buffers, waiting until all data is written, internal."""
         await self._write_queue.join()
-
-        if self._write_exc is not None:
-            raise self._write_exc
+        self._check_broken()
 
     def abort(self) -> None:
         """Close the transport immediately, discarding pending writes."""

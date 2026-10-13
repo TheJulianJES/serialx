@@ -98,6 +98,10 @@ async def test_pyodide_flush_after_write_error() -> None:
         await asyncio.wait_for(transport.wait_closed(), 1)
         assert transport.get_write_buffer_size() == 0
 
+        # The transport stays broken
+        with pytest.raises(RuntimeError, match="write failed"):
+            await asyncio.wait_for(transport.flush(), 1)
+
 
 async def test_pyodide_reconfigure_after_drain_timeout() -> None:
     """Writes still go out after a reconfigure had to discard stalled writes."""
