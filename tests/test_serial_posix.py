@@ -8,13 +8,15 @@ if sys.platform in ("win32", "emscripten"):
     pytest.skip("POSIX-only tests", allow_module_level=True)
 
 import array
+import asyncio
 import errno
+import os
 import termios
 from typing import Any
 from unittest.mock import patch
 
-from serialx import ModemPins, PinState
-from serialx.platforms.serial_posix import PosixSerial
+from serialx import ModemPins, PinState, create_serial_connection
+from serialx.platforms.serial_posix import PosixSerial, PosixSerialTransport
 
 
 def test_num_unread_bytes_uses_native_int_ioctl_buffer() -> None:
@@ -127,3 +129,26 @@ def test_termios_error_raised_as_os_error_bad_descriptor() -> None:
 
     assert raised.value.errno is not None
     assert raised.value.strerror is not None
+
+
+async def test_async_empty_read_is_not_a_hangup() -> None:
+    """A read wakeup that finds no data does not close the transport."""
+    master, slave = os.openpty()
+    loop = asyncio.get_running_loop()
+
+    try:
+        transport, _ = await create_serial_connection(
+            loop, asyncio.Protocol, os.ttyname(slave), baudrate=115200
+        )
+        assert isinstance(transport, PosixSerialTransport)
+
+        # Input can be flushed between the fd polling readable and the `read`, e.g.
+        # by a concurrent `reset_read_buffer()`
+        transport._read_ready()
+        assert not transport.is_closing()
+
+        transport.close()
+        await asyncio.wait_for(transport.wait_closed(), timeout=2.0)
+    finally:
+        os.close(master)
+        os.close(slave)

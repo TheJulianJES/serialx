@@ -535,8 +535,10 @@ class PosixSerialTransport(DescriptorTransport):
             path=normalized_path,
             # `DescriptorTransport` opened the port
             fileno=self._fileno,
-            # Nonblocking mode
-            min_read_size=0,
+            # With `O_NONBLOCK`, VMIN=1 and VTIME=0 return whatever is buffered without
+            # waiting. Unlike VMIN=0, an empty read is `EAGAIN` instead of 0 bytes,
+            # which would be mistaken for a hangup.
+            min_read_size=1,
             inter_byte_timeout=0,
         )
         self._extra["serial"] = self._serial
