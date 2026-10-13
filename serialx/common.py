@@ -683,12 +683,21 @@ class BaseSerial(io.RawIOBase):
     @contextmanager
     def _settings_update(self, update: PortSettingsUpdate) -> Iterator[None]:
         """Store the update as current settings, restoring the old ones on failure."""
-        previous = self._all_settings()
+        # Only the updated fields, so a concurrent update's settings are kept
+        current = self._all_settings()
+        previous = PortSettingsUpdate(
+            **{
+                name: getattr(current, name)
+                for name, value in dataclasses.asdict(update).items()
+                if value is not None
+            }
+        )
         self._store_settings_update(update)
 
+        # Not `BaseException`: a cancelled update may still be applied by the backend
         try:
             yield
-        except BaseException:
+        except Exception:
             # Otherwise every later reconfigure would retry the rejected setting
             self._store_settings_update(previous)
             raise

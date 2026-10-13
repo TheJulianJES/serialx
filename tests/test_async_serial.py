@@ -1,5 +1,6 @@
 """Tests for the AsyncSerial API."""
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ from serialx import (
     UnsupportedSetting,
     async_serial_for_url,
 )
+from serialx.common import PortSettingsUpdate
 from tests.common import SerialPair, async_create_serial_pair
 
 
@@ -172,3 +174,25 @@ async def test_reconfigure_port_failure_keeps_settings(serial_pair: SerialPair) 
 
         assert serial.baudrate == 115200
         assert serial.stopbits is StopBits.ONE
+
+
+async def test_reconfigure_port_cancelled_keeps_settings(
+    serial_pair: SerialPair,
+) -> None:
+    """A cancelled `reconfigure_port` may still be applied, so its settings are kept."""
+    async with async_serial_for_url(serial_pair.left, baudrate=115200) as serial:
+        started = asyncio.Event()
+
+        async def _slow_reconfigure(update: PortSettingsUpdate) -> None:
+            started.set()
+            await asyncio.sleep(10)
+
+        with patch.object(serial.transport, "_reconfigure_port", _slow_reconfigure):
+            task = asyncio.create_task(serial.reconfigure_port(baudrate=9600))
+            await started.wait()
+            task.cancel()
+
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert serial.baudrate == 9600

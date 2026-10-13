@@ -229,6 +229,26 @@ def test_reconfigure_port_failure_keeps_settings() -> None:
     assert serial.baudrate == 115200
 
 
+def test_reconfigure_port_failure_restores_only_its_settings() -> None:
+    """A rejected update does not undo settings changed by another one meanwhile."""
+
+    class _ConcurrentSerial(_RejectingSerial):
+        def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
+            if update.stopbits is StopBits.ONE_POINT_FIVE:
+                # Another update succeeding while this one is in progress
+                self._store_settings_update(PortSettingsUpdate(baudrate=57600))
+
+            super()._reconfigure_port(update)
+
+    serial = _ConcurrentSerial("/dev/null", baudrate=9600)
+
+    with pytest.raises(UnsupportedSetting):
+        serial.reconfigure_port(stopbits=StopBits.ONE_POINT_FIVE)
+
+    assert serial.stopbits is StopBits.ONE
+    assert serial.baudrate == 57600
+
+
 def test_deprecated_setter_failure_keeps_settings() -> None:
     """A rejected deprecated property setter does not store the value either."""
     serial = _RejectingSerial("/dev/null", baudrate=9600)
