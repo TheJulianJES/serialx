@@ -9,7 +9,10 @@ if sys.platform in ("win32", "emscripten"):
 
 import array
 import errno
+import os
+import resource
 import termios
+import tty
 from typing import Any
 from unittest.mock import patch
 
@@ -127,3 +130,32 @@ def test_termios_error_raised_as_os_error_bad_descriptor() -> None:
 
     assert raised.value.errno is not None
     assert raised.value.strerror is not None
+
+
+def test_read_write_fd_above_fd_setsize() -> None:
+    """Sync reads and writes work with fds that `select` can't handle."""
+    high_fd = 1100  # `FD_SETSIZE` is 1024 on Linux and macOS
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+
+    if hard != resource.RLIM_INFINITY and hard <= high_fd:
+        pytest.skip(f"RLIMIT_NOFILE hard limit {hard} is too low")
+
+    resource.setrlimit(resource.RLIMIT_NOFILE, (max(soft, high_fd + 1), hard))
+    master, slave = os.openpty()
+
+    try:
+        tty.setraw(slave)
+        os.dup2(slave, high_fd)
+        serial = PosixSerial(fileno=high_fd, read_timeout=0.1)
+
+        os.write(master, b"in")
+        assert serial.readexactly(2) == b"in"
+        assert serial.read(1) == b""
+
+        serial.write(b"out")
+        assert os.read(master, 3) == b"out"
+    finally:
+        os.close(high_fd)
+        os.close(master)
+        os.close(slave)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))

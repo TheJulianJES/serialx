@@ -71,6 +71,14 @@ class TcsetattrFlags(NamedTuple):
     cc_vtime: int
 
 
+def wait_for_fd(fd: int, events: int, timeout: float | None) -> bool:
+    """Wait until `fd` is ready, `select` can't handle fds >= `FD_SETSIZE`."""
+    poller = select.poll()
+    poller.register(fd, events)
+
+    return bool(poller.poll(None if timeout is None else timeout * 1000))
+
+
 def modem_pins_mask_of_value(modem_pins: ModemPins, mask: PinState) -> int:
     """Get modem bit mask for bits matching the specified value."""
     result = 0x00000000
@@ -407,8 +415,7 @@ class PosixSerial(BaseSerial):
             """Read bytes from serial port into buffer."""
             assert self._fileno is not None
 
-            ready, _, _ = select.select([self._fileno], [], [], timeout)
-            if not ready:
+            if not wait_for_fd(self._fileno, select.POLLIN, timeout):
                 return 0
 
             try:
@@ -434,8 +441,7 @@ class PosixSerial(BaseSerial):
             """Read bytes from serial port into buffer."""
             assert self._fileno is not None
 
-            ready, _, _ = select.select([self._fileno], [], [], timeout)
-            if not ready:
+            if not wait_for_fd(self._fileno, select.POLLIN, timeout):
                 return 0
 
             m = memoryview(b).cast("B")
@@ -472,7 +478,7 @@ class PosixSerial(BaseSerial):
 
         while written < len(view):
             with measure_time() as get_elapsed:
-                _, ready, _ = select.select([], [self._fileno], [], remaining_timeout)
+                ready = wait_for_fd(self._fileno, select.POLLOUT, remaining_timeout)
 
             if not ready:
                 raise TimeoutError("Write timeout")
