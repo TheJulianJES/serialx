@@ -50,6 +50,7 @@ are listed in the [main API documentation](../api.md). The most common ones are 
 | ---                         | ---                        | ---                                          |
 | `port`                      | `path`                     |                                              |
 | `portstr`                   | `path`                     |                                              |
+| `name`                      | `path`                     |                                              |
 | `timeout`                   | `read_timeout`             |                                              |
 | `writeTimeout`              | `write_timeout`            |                                              |
 | `bytesize`                  | `byte_size`                |                                              |
@@ -73,6 +74,11 @@ are listed in the [main API documentation](../api.md). The most common ones are 
 | `baudrate = X`              | `reconfigure_port(baudrate=X)` | Setters are deprecated                   |
 | `stop_bits = X`             | `reconfigure_port(stopbits=X)` | Setters are deprecated                   |
 | `data_bits = X`             | `reconfigure_port(byte_size=X)` | Setters are deprecated                  |
+| `bytesize = X`              | `reconfigure_port(byte_size=X)` | Setters are deprecated                  |
+| `stopbits = X`              | `reconfigure_port(stopbits=X)` | Setters are deprecated                   |
+| `parity = X`                | `reconfigure_port(parity=X)` | Setters are deprecated                     |
+| `xonxoff = X`, `rtscts = X`, `dsrdtr = X` | `reconfigure_port(xonxoff=X)`, ... | Setters are deprecated   |
+| `port = X`                  | `path=X`                   | Constructor kwarg; setter only works on a closed port and is deprecated |
 | `SerialPortInfo[i]`         | attribute access           | Slicing `SerialPortInfo` is deprecated       |
 | `SerialPortInfo.description`| `SerialPortInfo.product`   |                                              |
 
