@@ -209,14 +209,11 @@ class PyodideSerialTransport(BaseSerialTransport):
                 f"`register_js_port(path, js_port)` or pass `js_port=` to `connect`"
             )
 
-        self._js_port = port
-        await self._open_js_port()
+        await self._open_js_port(port)
         self._call_protocol_connection_made()
 
-    async def _open_js_port(self) -> None:
+    async def _open_js_port(self, port: JsSerialPort) -> None:
         """Open the JS port with the current settings and start the stream loops."""
-        assert self._js_port is not None
-
         # It would be more correct to raise an exception here but software flow control
         # is used by too many applications
         if self._serial._xonxoff:
@@ -244,13 +241,16 @@ class PyodideSerialTransport(BaseSerialTransport):
                 f"Unsupported byte_size: {self._serial.byte_size!r}"
             )
 
-        await self._js_port.open(
+        await port.open(
             baudRate=self._serial.baudrate,
             dataBits=data_bits,
             flowControl=flow_control,
             parity=_PARITY_MAP[self._serial.parity],
             stopBits=_STOPBITS_MAP[self._serial.stopbits],
         )
+
+        # Only an opened port can be closed: `close()` rejects otherwise
+        self._js_port = port
 
         await self.set_modem_pins(
             rts=self._serial.rts_on_open,
@@ -290,7 +290,8 @@ class PyodideSerialTransport(BaseSerialTransport):
                 await self._reader_task
 
         await self._js_port.close()
-        await self._open_js_port()
+        port, self._js_port = self._js_port, None
+        await self._open_js_port(port)
 
     async def _drain_writer(self) -> None:
         """Let queued writes finish, then release the JS writer."""
@@ -413,7 +414,11 @@ class PyodideSerialTransport(BaseSerialTransport):
                     rts=self._serial.rts_on_close,
                     dtr=self._serial.dtr_on_close,
                 )
-            await self._js_port.close()
+            # `connection_lost` must be called even if the port fails to close
+            try:
+                await self._js_port.close()
+            except Exception:
+                _LOGGER.warning("Failed to close serial port", exc_info=True)
             self._js_port = None
 
         assert self._close_port_task is not None

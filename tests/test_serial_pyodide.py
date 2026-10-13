@@ -11,7 +11,9 @@ if sys.platform != "emscripten":
         allow_module_level=True,
     )
 
-from serialx import Parity, StopBits, create_serial_connection
+from pyodide.ffi import JsException  # type: ignore[import-not-found]
+
+from serialx import Parity, StopBits, create_serial_connection, open_serial_connection
 from serialx.common import SerialException, UnsupportedSetting
 from tests.common import create_pyodide_pair
 
@@ -64,3 +66,50 @@ async def test_pyodide_unregistered_port_raises() -> None:
             url="pyodide://not-registered",
             baudrate=115200,
         )
+
+
+async def test_pyodide_open_failure_raises() -> None:
+    """A port that fails to open raises and leaves the JS port alone."""
+    with create_pyodide_pair() as (left, right):
+        left_reader, left_writer = await open_serial_connection(
+            url=left, baudrate=115200
+        )
+        _, right_writer = await open_serial_connection(url=right, baudrate=115200)
+
+        try:
+            # The JS port is already open, so `port.open()` rejects
+            with pytest.raises(JsException, match="InvalidStateError"):
+                await asyncio.wait_for(
+                    create_serial_connection(
+                        asyncio.get_running_loop(),
+                        asyncio.Protocol,
+                        url=left,
+                        baudrate=115200,
+                    ),
+                    timeout=1,
+                )
+
+            # The failed connection did not close the port out from under the first
+            right_writer.write(b"still open")
+            assert await asyncio.wait_for(left_reader.readexactly(10), 1) == (
+                b"still open"
+            )
+        finally:
+            left_writer.close()
+            right_writer.close()
+            await asyncio.wait_for(left_writer.wait_closed(), 1)
+            await asyncio.wait_for(right_writer.wait_closed(), 1)
+
+
+async def test_pyodide_close_after_failed_reconfigure() -> None:
+    """Closing does not hang when reopening the port during a reconfigure failed."""
+    with create_pyodide_pair() as (left, _):
+        transport, _ = await create_serial_connection(
+            asyncio.get_running_loop(), asyncio.Protocol, url=left, baudrate=115200
+        )
+
+        with pytest.raises(UnsupportedSetting, match="stopbits"):
+            await transport.reconfigure_port(stopbits=StopBits.ONE_POINT_FIVE)
+
+        transport.close()
+        await asyncio.wait_for(transport.wait_closed(), 1)

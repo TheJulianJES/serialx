@@ -118,3 +118,14 @@ test("closing one side ends its own reader but leaves the peer intact", async ()
   peerReader.releaseLock();
   await b.close();
 });
+
+test("open() and close() reject when the port is in the wrong state", async () => {
+  const [a] = createFakeSerialPair();
+  await expect(a.close()).rejects.toMatchObject({ name: "InvalidStateError" });
+  await a.open({ baudRate: 115200 });
+  await expect(a.open({ baudRate: 115200 })).rejects.toMatchObject({
+    name: "InvalidStateError",
+  });
+  await a.close();
+  await expect(a.close()).rejects.toMatchObject({ name: "InvalidStateError" });
+});

@@ -43,7 +43,7 @@ export class FakeSerialPort {
 
   async open(options: SerialOptions): Promise<void> {
     if (this.#open) {
-      throw new Error("FakeSerialPort is already open");
+      throw new DOMException("The port is already open.", "InvalidStateError");
     }
     this.#open = true;
     this.#options = options;
@@ -70,7 +70,13 @@ export class FakeSerialPort {
   }
 
   async close(): Promise<void> {
-    if (!this.#open) return;
+    // Like a real port, closing a port that isn't open is an error
+    if (!this.#open) {
+      throw new DOMException(
+        "The port is already closed.",
+        "InvalidStateError",
+      );
+    }
     this.#open = false;
 
     if (this.#inboundController) {
