@@ -21,6 +21,7 @@ from serialx.platforms.serial_rfc2217.types import (
     ModemStateFlag,
     NotifyLinestateCmd,
     NotifyModemstateCmd,
+    Rfc2217CmdId,
     SignatureCmd,
     TelnetOption,
     WillCmd,
@@ -74,6 +75,28 @@ def test_flowcontrol_resume_roundtrip() -> None:
     cmd = FlowcontrolResumeCmd()
     assert cmd.to_bytes() == b""
     assert FlowcontrolResumeCmd.from_bytes(b"") == cmd
+
+
+@pytest.mark.parametrize(
+    "subneg",
+    [
+        # SET-CONTROL ack with an unassigned value
+        bytes([0xFF, 0xFA, 44, 105, 20, 0xFF, 0xF0]),
+        # SET-DATASIZE ack without a value
+        bytes([0xFF, 0xFA, 44, 102, 0xFF, 0xF0]),
+    ],
+)
+def test_malformed_server_subneg_ignored(subneg: bytes) -> None:
+    """A malformed server response is dropped without losing surrounding data."""
+    engine = Rfc2217()
+
+    assert engine.feed(b"AB" + subneg + b"CD") == (b"AB" + b"CD", [])
+    assert engine.feed(b"EF") == (b"EF", [])
+
+    # Later commands are still parsed
+    baudrate_ack = bytes([0xFF, 0xFA, 44, 101]) + (115200).to_bytes(4, "big")
+    assert engine.feed(baudrate_ack + bytes([0xFF, 0xF0])) == (b"", [])
+    assert engine.pop_pending_rfc2217(Rfc2217CmdId.SET_BAUDRATE) is not None
 
 
 def test_invalid_byte_size_rejected_before_sending() -> None:

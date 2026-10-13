@@ -172,10 +172,10 @@ class TelnetParser:
                         self._subneg_buffer.append(0xFF)
                         self._state = TelnetParserState.SUBNEG_DATA
                     elif byte == TelnetCmdId.SE:
+                        self._state = TelnetParserState.NORMAL
                         cmd = self._finish_subneg()
                         if cmd is not None:
                             result.append(cmd)
-                        self._state = TelnetParserState.NORMAL
                     else:
                         # Malformed, discard subneg and treat as normal IAC cmd
                         LOGGER.debug(
@@ -223,7 +223,15 @@ class TelnetParser:
             LOGGER.debug("Unknown RFC 2217 command code: %d", cmd_id)
             return None
 
-        cmd = cmd_cls.from_bytes(cmd_payload)
+        try:
+            cmd = cmd_cls.from_bytes(cmd_payload)
+        except (ValueError, IndexError):
+            # A single bad server response shouldn't take down the connection
+            LOGGER.warning(
+                "Ignoring malformed RFC 2217 %s: %s", cmd_id.name, cmd_payload.hex(" ")
+            )
+            return None
+
         LOGGER.debug("Parsed RFC2217 %s", cmd)
         return cmd
 
