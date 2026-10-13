@@ -808,13 +808,18 @@ class Win32SerialTransport(BaseSerialTransport):
         """Flush write buffers, waiting until all data is written, internal."""
         # The proactor transport only supports a single empty waiter at a time
         async with self._flush_lock:
-            assert self._serial is not None
-            assert self._internal_transport is not None
-            try:
-                # Wait for asyncio buffer to drain
-                await self._internal_transport._make_empty_waiter()  # type:ignore[attr-defined]
-            finally:
-                self._internal_transport._reset_empty_waiter()  # type:ignore[attr-defined]
+            if not self._closing and self._serial is not None:
+                assert self._internal_transport is not None
+                try:
+                    # Wait for asyncio buffer to drain
+                    await self._internal_transport._make_empty_waiter()  # type:ignore[attr-defined]
+                finally:
+                    self._internal_transport._reset_empty_waiter()  # type:ignore[attr-defined]
+
+            # The close releases the handle, wait for it instead
+            if self._closing or self._serial is None:
+                await asyncio.shield(self._closed_waiter)
+                return
 
             # Wait for hardware buffer to flush
             await self._loop.run_in_executor(None, self._serial.flush)
