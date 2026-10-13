@@ -577,6 +577,9 @@ async def test_lifecycle_write_after_close_is_dropped(serial_pair: SerialPair) -
 
         await sender.wait_closed()
 
+        # Also once the connection is fully gone
+        sender.write(b"after wait_closed")
+
         # Drain the receiver briefly to make sure nothing leaked through.
         await asyncio.sleep(0.1)
         assert receiver_proto.data_received_chunks == []
@@ -585,6 +588,28 @@ async def test_lifecycle_write_after_close_is_dropped(serial_pair: SerialPair) -
         await receiver.wait_closed()
     sender_proto.assert_clean()
     receiver_proto.assert_clean()
+
+
+@pytest.mark.skip_quirks(SerialQuirk.NO_BUFFER_CONTROL)
+@pytest.mark.parametrize("method", ["close", "abort"])
+async def test_lifecycle_pause_resume_after_close_is_noop(
+    serial_pair: SerialPair, method: str
+) -> None:
+    """A reader paused before close() can resume after it, like StreamReader does."""
+    loop = asyncio.get_running_loop()
+    proto = RecordingProtocol()
+
+    transport, _ = await create_serial_connection(
+        loop, lambda: proto, serial_pair.left, baudrate=115200
+    )
+
+    transport.pause_reading()
+    getattr(transport, method)()
+    await transport.wait_closed()
+
+    transport.resume_reading()
+    transport.pause_reading()
+    proto.assert_clean()
 
 
 # --- Connection ordering: connection_made must precede any data_received ---

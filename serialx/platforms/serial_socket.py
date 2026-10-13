@@ -302,17 +302,21 @@ class SocketSerialTransport(BaseSerialTransport):
     def write(self, data: bytes | bytearray | memoryview) -> None:
         """Write data to the socket."""
         self._check_broken()
+        if self._closing:
+            return
         assert self._tcp_transport is not None
         self._tcp_transport.write(data)
 
     def pause_reading(self) -> None:
         """Pause reading from the socket transport."""
-        assert self._tcp_transport is not None
+        if self._tcp_transport is None:
+            return
         self._tcp_transport.pause_reading()
 
     def resume_reading(self) -> None:
         """Resume reading from the socket transport."""
-        assert self._tcp_transport is not None
+        if self._tcp_transport is None:
+            return
         self._tcp_transport.resume_reading()
 
     def is_closing(self) -> bool:
