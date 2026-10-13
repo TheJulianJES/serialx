@@ -499,7 +499,10 @@ class RFC2217Serial(SocketSerial):
 
         LOGGER.debug("Configuring port: %s", update)
 
-        for cmd in self._build_port_config_commands(update):
+        # Validate the whole update before sending any of it
+        cmds = list(self._build_port_config_commands(update))
+
+        for cmd in cmds:
             with self._socket_timeout(self._connect_timeout):
                 self._send_and_wait(cmd)
 
@@ -819,7 +822,10 @@ class RFC2217SerialTransport(BaseSerialTransport):
         assert self._serial is not None
         LOGGER.debug("Configuring port: %s", update)
 
-        for cmd in self._serial._build_port_config_commands(update):
+        # Validate the whole update before sending any of it
+        cmds = list(self._serial._build_port_config_commands(update))
+
+        for cmd in cmds:
             await self._send_and_wait(cmd)
 
         LOGGER.debug("Port configuration complete")

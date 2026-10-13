@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+from unittest.mock import AsyncMock, Mock, PropertyMock, patch
 
 import pytest
 
@@ -13,7 +14,11 @@ if sys.platform == "emscripten":
 
 from serialx import Serial, SerialException, create_serial_connection
 from serialx.common import PortSettingsUpdate, UnsupportedSetting, measure_time
-from serialx.platforms.serial_rfc2217 import Rfc2217
+from serialx.platforms.serial_rfc2217 import (
+    Rfc2217,
+    RFC2217Serial,
+    RFC2217SerialTransport,
+)
 from serialx.platforms.serial_rfc2217.types import (
     FlowcontrolResumeCmd,
     FlowcontrolSuspendCmd,
@@ -81,6 +86,37 @@ def test_invalid_byte_size_rejected_before_sending() -> None:
     engine = Rfc2217()
     with pytest.raises(UnsupportedSetting):
         list(engine.build_port_config_commands(PortSettingsUpdate(byte_size=123)))
+
+
+def test_sync_rejected_update_sends_nothing() -> None:
+    """A rejected setting fails before any part of the update reaches the server."""
+    serial = RFC2217Serial("rfc2217://127.0.0.1:1", baudrate=9600)
+    serial._engine.mark_negotiated()
+    serial._send_and_wait = Mock()  # type: ignore[method-assign]
+
+    with (
+        patch.object(
+            RFC2217Serial, "is_open", new_callable=PropertyMock, return_value=True
+        ),
+        pytest.raises(UnsupportedSetting),
+    ):
+        serial.reconfigure_port(baudrate=19200, byte_size=9)
+
+    serial._send_and_wait.assert_not_called()
+    assert serial.baudrate == 9600
+
+
+async def test_async_rejected_update_sends_nothing() -> None:
+    """A rejected setting fails before any part of the update reaches the server."""
+    transport = RFC2217SerialTransport(asyncio.get_running_loop(), asyncio.Protocol())
+    transport._serial = RFC2217Serial("rfc2217://127.0.0.1:1", baudrate=9600)
+    transport._send_and_wait = AsyncMock()  # type: ignore[method-assign]
+
+    with pytest.raises(UnsupportedSetting):
+        await transport.reconfigure_port(baudrate=19200, byte_size=9)
+
+    transport._send_and_wait.assert_not_called()
+    assert transport._serial.baudrate == 9600
 
 
 def test_sync_negotiate_timeout_silent_server() -> None:
