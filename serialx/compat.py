@@ -2,8 +2,8 @@
 
 from .common import Parity, StopBits
 
-# Native serialx raises plain `TimeoutError`. The pyserial shim raises
-# `serialx.serialutil.SerialTimeoutException`, which is also a `TimeoutError`.
+# Native serialx raises plain `TimeoutError`. For write timeouts, the pyserial shim
+# raises `serial.SerialTimeoutException`, which is also a `TimeoutError`.
 SerialTimeoutException = TimeoutError
 
 FIVEBITS = 5

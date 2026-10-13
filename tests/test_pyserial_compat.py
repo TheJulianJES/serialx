@@ -31,7 +31,7 @@ from serialx import (
     SerialException,
     SerialPortInfo,
 )
-from serialx.serialutil import SerialTimeoutException
+from serialx.common import SerialTimeoutException
 from serialx.tools.list_ports import comports, grep
 from serialx.tools.list_ports_common import ListPortInfo
 from tests.common import SerialPair, SerialQuirk
@@ -160,7 +160,7 @@ def test_reconfigure_port_closed_raises() -> None:
 
 
 def test_compat_timeout_exception() -> None:
-    """In pyserial mode a `TimeoutError` becomes a `SerialTimeoutException`."""
+    """In pyserial mode a write `TimeoutError` becomes a `SerialTimeoutException`."""
     s = Serial(_wrap_exceptions=True)
     s._write = Mock(side_effect=TimeoutError("Write timeout"))  # type: ignore[method-assign]
 
@@ -171,6 +171,27 @@ def test_compat_timeout_exception() -> None:
     assert isinstance(exc_info.value, SerialException)
     assert isinstance(exc_info.value, TimeoutError)
     assert isinstance(exc_info.value.__cause__, TimeoutError)
+
+    # Native serialx keeps raising the plain `TimeoutError`
+    s = Serial()
+    s._write = Mock(side_effect=TimeoutError("Write timeout"))  # type: ignore[method-assign]
+
+    with pytest.raises(TimeoutError) as native_exc_info:
+        s.write(b"test")
+
+    assert type(native_exc_info.value) is TimeoutError
+
+
+def test_compat_other_timeouts_are_serial_exception() -> None:
+    """Like pyserial, only write timeouts raise `SerialTimeoutException`."""
+    s = Serial("/dev/null", _wrap_exceptions=True)
+    s._open = Mock(side_effect=TimeoutError("Timeout while connecting"))  # type: ignore[method-assign]
+    s._close = Mock()  # type: ignore[method-assign]
+
+    with pytest.raises(SerialException, match="Timeout while connecting") as exc_info:
+        s.open()
+
+    assert not isinstance(exc_info.value, SerialTimeoutException)
 
 
 @pytest.mark.skip_quirks(SerialQuirk.NO_WRITE_TIMEOUT)

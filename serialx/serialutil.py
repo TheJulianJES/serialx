@@ -1,5 +1,5 @@
 """serialx pyserial compatibility module."""
 
-from .common import SerialException, SerialTimeoutException
+from .common import SerialException
 
-__all__ = ["SerialException", "SerialTimeoutException"]
+__all__ = ["SerialException"]

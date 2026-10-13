@@ -246,7 +246,10 @@ class UnknownUriScheme(SerialException):
 
 
 class SerialTimeoutException(SerialException, TimeoutError):
-    """pyserial-compatible timeout, raised instead of `TimeoutError` by the shim."""
+    """pyserial-compatible write timeout, raised instead of `TimeoutError` by the shim.
+
+    Not exported by `serialx`, where `SerialTimeoutException` is `TimeoutError`.
+    """
 
 
 class StopBits(float, Enum):
@@ -456,12 +459,11 @@ def maybe_wrap_exceptions(
     def replacement(self: BaseSerial, /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
         try:
             return func(self, *args, **kwargs)
+        except SerialTimeoutException:
+            # Already translated for pyserial by `write()`
+            raise
         except Exception as exc:
             if self._wrap_exceptions:
-                # pyserial raises `SerialTimeoutException` for write timeouts
-                if isinstance(exc, TimeoutError):
-                    raise SerialTimeoutException(str(exc)) from exc
-
                 raise SerialException(str(exc)) from exc
 
             raise
@@ -867,7 +869,15 @@ class BaseSerial(io.RawIOBase):
         """Write bytes to serial port."""
         self._check_broken()
         effective_timeout = self._write_timeout if timeout is None else timeout
-        return self._write(data, timeout=effective_timeout)
+
+        try:
+            return self._write(data, timeout=effective_timeout)
+        except TimeoutError as exc:
+            # pyserial raises `SerialTimeoutException` only for write timeouts
+            if self._wrap_exceptions:
+                raise SerialTimeoutException(str(exc)) from exc
+
+            raise
 
     @abstractmethod
     def _write(self, data: Buffer, *, timeout: float | None) -> int:

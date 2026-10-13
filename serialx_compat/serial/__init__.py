@@ -41,7 +41,7 @@ from serialx import (
     list_serial_ports,
     open_serial_connection,
 )
-from serialx.serialutil import SerialTimeoutException
+from serialx.common import SerialTimeoutException
 
 VERSION = version("serialx-compat")
 __version__ = VERSION
