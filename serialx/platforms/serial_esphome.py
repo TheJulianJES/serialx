@@ -23,18 +23,24 @@ package to be installed, provided by the ``esphome`` extra:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Coroutine
-from contextlib import suppress
+from collections.abc import AsyncIterator, Callable, Coroutine
+from contextlib import asynccontextmanager, suppress
 import dataclasses
 from enum import Enum, IntFlag
 import errno
 import functools
 import logging
 from operator import attrgetter
+import sys
 import threading
 from typing import Any, ParamSpec, TypeVar, cast
 import urllib.parse
 import warnings
+
+if sys.version_info >= (3, 11):
+    from asyncio import timeout as asyncio_timeout
+else:
+    from async_timeout import timeout as asyncio_timeout
 
 from aioesphomeapi.client import MIN_VERSION_PROXY_ACK, APIClient
 from aioesphomeapi.core import (  # type: ignore[attr-defined]
@@ -362,6 +368,23 @@ class ESPHomeSerial(BaseSerial):
 
         self._last_line_states = LineStateFlag(0)
 
+    @asynccontextmanager
+    async def _connect_deadline(self) -> AsyncIterator[None]:
+        """Bound connecting to the device and claiming the port by `connect_timeout`."""
+        try:
+            async with asyncio_timeout(self._connect_timeout):
+                yield
+        except TimeoutError as exc:
+            # A request that timed out on its own already says which one
+            if exc.args:
+                raise
+
+            address = self._api.address if self._api is not None else None
+            raise TimeoutError(
+                f"Timed out connecting to ESPHome device {address!r} after"
+                f" {self._connect_timeout}s"
+            ) from exc
+
     def _in_event_loop(self) -> bool:
         """Check if we are currently running in the event loop."""
         assert self._loop is not None
@@ -626,7 +649,8 @@ class ESPHomeSerial(BaseSerial):
             self._client_loop = self._api.loop
 
             self._disconnect_api = True
-            await self._call_on_client_loop(self._api.connect(login=True))
+            async with self._connect_deadline():
+                await self._call_on_client_loop(self._api.connect(login=True))
         else:
             # Don't disconnect an externally-passed API
             self._disconnect_api = False
@@ -1186,28 +1210,30 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         self._extra["serial"] = self._serial
 
         assert self._serial is not None
-        await self._serial._async_open()
 
-        assert self._serial._api is not None
-        # Install the data handler *before* subscribing. The device starts streaming as
-        # soon as the subscribe lands, so anything it sends in the gap -- a bootloader
-        # banner, a chatty sensor's first reading -- is silently dropped.
-        self._unsub = await self._serial._call_on_client_loop(
-            self._register_transport_data_handler()
-        )
-        self._closed_unsub = await self._serial._call_on_client_loop(
-            self._register_transport_closed_handler()
-        )
-        self._identity_unsub = await self._serial._call_on_client_loop(
-            self._register_transport_identity_handler()
-        )
+        async with self._serial._connect_deadline():
+            await self._serial._async_open()
 
-        # Nothing is replayed for a connection that closed while we were setting
-        # up, so the state has to be re-checked once the callback is installed.
-        if not self._serial._api.is_connected:
-            raise SerialException("ESPHome API connection closed while connecting")
+            assert self._serial._api is not None
+            # Install the data handler *before* subscribing. The device starts streaming
+            # as soon as the subscribe lands, so anything it sends in the gap -- a
+            # bootloader banner, a chatty sensor's first reading -- is silently dropped.
+            self._unsub = await self._serial._call_on_client_loop(
+                self._register_transport_data_handler()
+            )
+            self._closed_unsub = await self._serial._call_on_client_loop(
+                self._register_transport_closed_handler()
+            )
+            self._identity_unsub = await self._serial._call_on_client_loop(
+                self._register_transport_identity_handler()
+            )
 
-        await self._serial._async_configure_port()
+            # Nothing is replayed for a connection that closed while we were setting
+            # up, so the state has to be re-checked once the callback is installed.
+            if not self._serial._api.is_connected:
+                raise SerialException("ESPHome API connection closed while connecting")
+
+            await self._serial._async_configure_port()
 
         self._call_protocol_connection_made()
 

@@ -1600,3 +1600,56 @@ async def test_no_serial_number_skips_the_check() -> None:
             pass
 
     assert len(api.serial_proxy_get_identity.mock_calls) == 0
+
+
+async def _never_answer(*args: object, **kwargs: object) -> None:
+    """Stand in for a request the device never answers."""
+    await asyncio.Event().wait()
+
+
+@pytest.mark.parametrize(
+    "silent_call", ["connect", "device_info", "serial_proxy_subscribe_await_response"]
+)
+async def test_connect_timeout_bounds_handshake(silent_call: str) -> None:
+    """`connect_timeout` bounds the whole handshake, and a timeout cleans it up."""
+    api = mock_api_client("Zigbee")
+    getattr(api, silent_call).side_effect = _never_answer
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        with pytest.raises(
+            TimeoutError, match=r"connecting to ESPHome device '127\.0\.0\.1'"
+        ):
+            async with async_serial_for_url(
+                url="esphome://127.0.0.1:6053/?port_name=Zigbee",
+                baudrate=115200,
+                connect_timeout=0.1,
+            ):
+                pass
+
+    assert len(api.disconnect.mock_calls) == 1
+
+
+def test_sync_connect_timeout_bounds_api_connect() -> None:
+    """`connect_timeout` bounds the sync API's connect too."""
+    apis: list[MagicMock] = []
+
+    def create_api(**kwargs: object) -> MagicMock:
+        # Created on the background loop, which the real client binds itself to
+        api = mock_api_client("Zigbee")
+        api.connect.side_effect = _never_answer
+        apis.append(api)
+        return api
+
+    with patch("serialx.platforms.serial_esphome.APIClient", side_effect=create_api):
+        serial = ESPHomeSerial(
+            "esphome://127.0.0.1:6053/?port_name=Zigbee",
+            baudrate=115200,
+            connect_timeout=0.1,
+        )
+
+        with pytest.raises(TimeoutError, match="after 0.1s"):
+            serial.open()
+
+    (api,) = apis
+    assert len(api.disconnect.mock_calls) == 1
+    assert serial._loop_thread is None
