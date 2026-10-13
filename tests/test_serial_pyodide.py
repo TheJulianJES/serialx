@@ -1,6 +1,7 @@
 """Pyodide serial port tests."""
 
 import asyncio
+import errno
 import sys
 
 import pytest
@@ -92,14 +93,15 @@ async def test_pyodide_flush_after_write_error() -> None:
         for _ in range(3):
             transport.write(b"x" * 10)
 
-        with pytest.raises(RuntimeError, match="write failed"):
+        with pytest.raises(OSError, match="write failed") as exc_info:
             await asyncio.wait_for(transport.flush(), 1)
+        assert exc_info.value.errno == errno.EIO
 
         await asyncio.wait_for(transport.wait_closed(), 1)
         assert transport.get_write_buffer_size() == 0
 
         # The transport stays broken
-        with pytest.raises(RuntimeError, match="write failed"):
+        with pytest.raises(OSError, match="write failed"):
             await asyncio.wait_for(transport.flush(), 1)
 
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import logging
 from typing import Any, final
 
@@ -328,8 +329,10 @@ class PyodideSerialTransport(BaseSerialTransport):
                 await self._js_writer.write(js.Uint8Array.new(chunk))
             except Exception as e:
                 _LOGGER.exception("Error writing to serial port")
-                self._mark_broken(e)
-                self._cleanup(e)
+                exc = OSError(errno.EIO, f"Error writing to serial port: {e}")
+                exc.__cause__ = e
+                self._mark_broken(exc)
+                self._cleanup(exc)
                 break
             finally:
                 self._write_buffer_size -= len(chunk)
