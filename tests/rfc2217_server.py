@@ -72,6 +72,9 @@ class FakeRfc2217Server:
         self._server = socket.create_server(("127.0.0.1", 0))
         self._server.settimeout(POLL_INTERVAL)
         self._conn: socket.socket | None = None
+        # Guards `_conn` only, so that shutting it down never waits on a blocked send
+        self._conn_lock = threading.Lock()
+        # Serializes writes to the client
         self._send_lock = threading.Lock()
         self._connected = threading.Event()
         self._stopping = threading.Event()
@@ -96,7 +99,7 @@ class FakeRfc2217Server:
         """Stop the server and close the client connection."""
         self._stopping.set()
 
-        with self._send_lock:
+        with self._conn_lock:
             conn = self._conn
 
         if conn is not None:
@@ -118,7 +121,7 @@ class FakeRfc2217Server:
 
     def disconnect_client(self) -> None:
         """Close the connection to the client."""
-        with self._send_lock:
+        with self._conn_lock:
             conn = self._conn
 
         if conn is not None:
@@ -163,7 +166,7 @@ class FakeRfc2217Server:
 
             conn.settimeout(None)
 
-            with self._send_lock:
+            with self._conn_lock:
                 if self._stopping.is_set():
                     conn.close()
                     return
@@ -240,7 +243,8 @@ class FakeRfc2217Server:
         self._enabled_options.add((cmd, option))
         reply = TelnetCmdId.DO if cmd == TelnetCmdId.WILL else TelnetCmdId.WILL
 
-        with self._send_lock:
+        # The client may already be gone, which `_serve` notices on its next read
+        with self._send_lock, contextlib.suppress(OSError):
             conn.sendall(bytes([TelnetCmdId.IAC, reply, option]))
 
     def _handle_subneg(self, conn: socket.socket, subneg: bytes) -> None:
@@ -263,7 +267,8 @@ class FakeRfc2217Server:
             if self.hold_acks:
                 self._held_acks.append(ack)
             else:
-                conn.sendall(ack)
+                with contextlib.suppress(OSError):
+                    conn.sendall(ack)
 
 
 @contextlib.contextmanager
