@@ -950,14 +950,15 @@ def test_sync_read_until_total_timeout(serial_pair: SerialPair) -> None:
         Serial.from_url(serial_pair.left, baudrate=115200) as left,
         Serial.from_url(serial_pair.right, baudrate=115200, read_timeout=0.5) as right,
     ):
-        # Write data without a newline; read_until calls readexactly(1) per byte,
-        # then blocks on the next one. Total time must still be ~0.5s.
+        # Write data without a newline; read_until reads one byte at a time, then
+        # blocks on the next one. Total time must still be ~0.5s.
         left.write(b"no newline here")
 
         with measure_time() as elapsed:
-            with pytest.raises(IncompleteReadError):
-                right.read_until(b"\n")
+            result = right.read_until(b"\n")
 
+        # Like pyserial, the partial data is returned on timeout
+        assert result == b"no newline here"
         assert elapsed() == pytest.approx(0.5, abs=0.15)
 
 

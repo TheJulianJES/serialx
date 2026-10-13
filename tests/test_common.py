@@ -235,6 +235,14 @@ def test_readexactly_remaining_timeout_never_negative() -> None:
     assert serial.timeouts == [0.05, 0.0, 0.0]
 
 
+def test_read_until_returns_partial_on_timeout() -> None:
+    """`read_until` returns the bytes read so far instead of raising on timeout."""
+    serial = _SlowReadSerial([b"a", b"b"], read_timeout=0.05)
+
+    assert serial.read_until(b"\n") == b"ab"
+    assert serial.timeouts == [0.05, 0.0, 0.0]
+
+
 def test_check_broken_raises_fresh_instance() -> None:
     """The stored exception is not re-raised, so its traceback cannot grow."""
     serial = _StubSerial("/dev/null", do_not_open=True)

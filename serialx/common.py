@@ -965,19 +965,21 @@ class BaseSerial(io.RawIOBase):
         *,
         timeout: float | None = None,
     ) -> bytes:
-        """Read until the expected sequence is found."""
+        """Read until `expected` is found, `size` bytes are read, or the read times out."""
         buffer = bytearray()
+        byte = bytearray(1)
         expected_len = len(expected)
         remaining_timeout = self.read_timeout if timeout is None else timeout
 
         while True:
             with measure_time() as get_elapsed:
-                byte = self.readexactly(1, timeout=remaining_timeout)
+                read = self.readinto(byte, timeout=remaining_timeout)
 
             if remaining_timeout is not None:
                 remaining_timeout = max(0.0, remaining_timeout - get_elapsed())
 
-            if not byte:
+            # Timed out, return what we have so far
+            if read == 0:
                 break
 
             buffer += byte
