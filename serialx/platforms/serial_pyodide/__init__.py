@@ -161,6 +161,7 @@ class PyodideSerialTransport(BaseSerialTransport):
 
         self._write_queue: asyncio.Queue[bytes | type[ExitSentinel]] = asyncio.Queue()
         self._write_buffer_size = 0
+        self._write_exc: Exception | None = None
         self._closing = False
         self._close_port_task: asyncio.Task[None] | None = None
 
@@ -307,6 +308,10 @@ class PyodideSerialTransport(BaseSerialTransport):
                 with contextlib.suppress(BaseException):
                     await self._writer_task
 
+                # Drop the unwritten data and our exit sentinel, the next writer loop
+                # would otherwise pick them up
+                self._discard_write_queue()
+
         if self._js_writer is not None:
             self._js_writer.releaseLock()
             self._js_writer = None
@@ -324,11 +329,22 @@ class PyodideSerialTransport(BaseSerialTransport):
                 await self._js_writer.write(js.Uint8Array.new(chunk))
             except Exception as e:
                 _LOGGER.exception("Error writing to serial port")
+                self._write_exc = e
                 self._cleanup(e)
                 break
             finally:
                 self._write_buffer_size -= len(chunk)
                 self._write_queue.task_done()
+
+        # Nothing else will be written, don't leave `flush()` waiting on it
+        self._discard_write_queue()
+
+    def _discard_write_queue(self) -> None:
+        """Drop all queued writes."""
+        while not self._write_queue.empty():
+            self._write_queue.get_nowait()
+            self._write_queue.task_done()
+        self._write_buffer_size = 0
 
     async def _reader_loop(self) -> None:
         while self._js_reader is not None:
@@ -387,16 +403,15 @@ class PyodideSerialTransport(BaseSerialTransport):
         """Flush write buffers, waiting until all data is written, internal."""
         await self._write_queue.join()
 
+        if self._write_exc is not None:
+            raise self._write_exc
+
     def abort(self) -> None:
         """Close the transport immediately, discarding pending writes."""
         if self._writer_task is not None and not self._writer_task.done():
             self._writer_task.cancel()
 
-        while not self._write_queue.empty():
-            self._write_queue.get_nowait()
-            self._write_queue.task_done()
-        self._write_buffer_size = 0
-
+        self._discard_write_queue()
         self._cleanup(None)
 
     def __del__(self) -> None:
