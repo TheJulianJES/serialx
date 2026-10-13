@@ -531,8 +531,16 @@ class PosixSerialTransport(DescriptorTransport):
         await super()._open(normalized_path)
 
         # Read timing is set by the transport below, not by the caller
-        kwargs.pop("min_read_size", None)
-        kwargs.pop("inter_byte_timeout", None)
+        overridden = {
+            key: kwargs.pop(key)
+            for key in ("min_read_size", "inter_byte_timeout")
+            if key in kwargs
+        }
+
+        if overridden:
+            LOGGER.debug(
+                "Ignoring read timing kwargs for async transport: %s", overridden
+            )
 
         self._serial = self._serial_cls(
             **kwargs,
