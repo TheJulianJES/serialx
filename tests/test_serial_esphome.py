@@ -47,6 +47,7 @@ from serialx import (
     redact_uri,
 )
 from serialx.platforms.serial_esphome import (
+    DEFAULT_REQUEST_TIMEOUT,
     ESPHOME_DEFAULT_PORT,
     MIN_VERSION_SERIAL_PROXY_SET_MODE,
     ESPHomeSerial,
@@ -1653,3 +1654,23 @@ def test_sync_connect_timeout_bounds_api_connect() -> None:
     (api,) = apis
     assert len(api.disconnect.mock_calls) == 1
     assert serial._loop_thread is None
+
+
+async def test_connect_timeout_none_keeps_requests_finite() -> None:
+    """Without a connect timeout, requests still get a timeout aioesphomeapi can use."""
+    api = mock_api_client("Zigbee")
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        async with async_serial_for_url(
+            url="esphome://127.0.0.1:6053/?port_name=Zigbee",
+            baudrate=115200,
+            connect_timeout=None,
+        ):
+            pass
+
+    assert api.serial_proxy_subscribe_await_response.mock_calls == [
+        call(0, timeout=DEFAULT_REQUEST_TIMEOUT)
+    ]
+    assert api.serial_proxy_set_mode_await_response.mock_calls == [
+        call(instance=0, mode=SerialProxyMode.RAW, timeout=DEFAULT_REQUEST_TIMEOUT)
+    ]

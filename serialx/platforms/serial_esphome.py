@@ -95,6 +95,10 @@ MIN_VERSION_SERIAL_PROXY_IDENTITY = APIVersion(1, 18)
 
 ESPHOME_DEFAULT_PORT = 6053
 
+# aioesphomeapi's own default for a request, used when `connect_timeout` is `None`. A
+# request the device never answers has to time out at some point.
+DEFAULT_REQUEST_TIMEOUT = 10.0
+
 PARITY_MAP = {
     Parity.NONE: SerialProxyParity.NONE,
     Parity.EVEN: SerialProxyParity.EVEN,
@@ -250,7 +254,7 @@ class ESPHomeSerial(BaseSerial):
     def __init__(
         self,
         *args: Any,
-        connect_timeout: float = 10.0,
+        connect_timeout: float | None = 10.0,
         loop: asyncio.AbstractEventLoop | None = None,
         api: APIClient | None = None,
         port_name: str | None = None,
@@ -273,7 +277,8 @@ class ESPHomeSerial(BaseSerial):
 
         Args:
             connect_timeout: Total timeout for connecting to the ESPHome device and
-                subscribing to events.
+                subscribing to events. `None` removes the overall limit, but a single
+                request the device never answers still times out.
             loop: Event loop to offload async operations to, optional. This is mostly
                 intended for internal use from the async transport. If an event loop is
                 not provided, the default for the synchronous API, a new one will be
@@ -368,6 +373,14 @@ class ESPHomeSerial(BaseSerial):
 
         self._last_line_states = LineStateFlag(0)
 
+    @property
+    def _request_timeout(self) -> float:
+        """Timeout for a single request to the device, which has to be finite."""
+        if self._connect_timeout is None:
+            return DEFAULT_REQUEST_TIMEOUT
+
+        return self._connect_timeout
+
     @asynccontextmanager
     async def _connect_deadline(self) -> AsyncIterator[None]:
         """Bound connecting to the device and claiming the port by `connect_timeout`."""
@@ -431,7 +444,7 @@ class ESPHomeSerial(BaseSerial):
         version = self._api.api_version
 
         if version is None or version < MIN_VERSION_PROXY_ACK:
-            await self._ping(timeout=self._connect_timeout)
+            await self._ping(timeout=self._request_timeout)
 
         if result is not None and result.status is not None:
             error_factory = STATUS_TO_ERROR_MAP.get(result.status)
@@ -706,7 +719,7 @@ class ESPHomeSerial(BaseSerial):
             if has_identity:
                 identity = await self._call_on_client_loop(
                     self._api.serial_proxy_get_identity(
-                        instance, timeout=self._connect_timeout
+                        instance, timeout=self._request_timeout
                     )
                 )
 
@@ -842,7 +855,7 @@ class ESPHomeSerial(BaseSerial):
         for instance, proxy_info in enumerate(info.serial_proxies):
             identity = await self._call_on_client_loop(
                 self._api.serial_proxy_get_identity(
-                    instance, timeout=self._connect_timeout
+                    instance, timeout=self._request_timeout
                 )
             )
 
@@ -917,7 +930,7 @@ class ESPHomeSerial(BaseSerial):
         await self._call_on_client_loop_validated(
             self._api.serial_proxy_subscribe_await_response(
                 self._instance_id,
-                timeout=self._connect_timeout,
+                timeout=self._request_timeout,
             )
         )
         self._instance_subscribed = True
@@ -941,7 +954,7 @@ class ESPHomeSerial(BaseSerial):
             self._api.serial_proxy_set_mode_await_response(
                 instance=self._instance_id,
                 mode=MODE_MAP[self._mode],
-                timeout=self._connect_timeout,
+                timeout=self._request_timeout,
             )
         )
 
