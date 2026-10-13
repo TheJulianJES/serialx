@@ -1029,6 +1029,11 @@ class RFC2217SerialTransport(BaseSerialTransport):
         # them first with a req/rsp round-trip, then tear down the connection.
         self._close_task = self._loop.create_task(self._flush_and_close())
 
+    def _has_unsent_data(self) -> bool:
+        """Return whether written data still has to be drained before closing."""
+        # The server may still hold written data once our own TCP buffer is empty
+        return self._needs_flush or super()._has_unsent_data()
+
     async def _flush_and_close(self) -> None:
         # If the connection drops (or the flush fails) mid-drain, close anyway
         with suppress(Exception):

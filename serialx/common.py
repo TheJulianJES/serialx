@@ -1282,10 +1282,14 @@ class BaseSerialTransport(asyncio.Transport):
             return
 
         timeout = self._serial.close_timeout
-        if timeout is None or self.get_write_buffer_size() == 0:
+        if timeout is None or not self._has_unsent_data():
             return
 
         self._close_timer = self._loop.call_later(timeout, self._on_close_timeout)
+
+    def _has_unsent_data(self) -> bool:
+        """Return whether written data still has to be drained before closing."""
+        return self.get_write_buffer_size() > 0
 
     def _on_close_timeout(self) -> None:
         self._close_timer = None
@@ -1293,7 +1297,7 @@ class BaseSerialTransport(asyncio.Transport):
             return
 
         LOGGER.warning(
-            "%r: close timed out with %d bytes unsent, aborting",
+            "%r: close timed out, aborting (%d bytes still buffered)",
             self,
             self.get_write_buffer_size(),
         )

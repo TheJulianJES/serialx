@@ -1,6 +1,7 @@
 """RFC2217 serial port tests."""
 
 import asyncio
+from collections.abc import Callable, Iterator
 import sys
 
 import pytest
@@ -21,13 +22,32 @@ from serialx.platforms.serial_rfc2217.types import (
     ModemStateFlag,
     NotifyLinestateCmd,
     NotifyModemstateCmd,
+    Rfc2217CmdId,
     SignatureCmd,
     TelnetOption,
     WillCmd,
 )
 
 from .common import HUB4COM_BINARY, SerialBackend, SerialPair, create_hub4com_pair
+from .rfc2217_server import FakeRfc2217Server, create_rfc2217_server
 from .socket_relay import create_accept_then_close_server, create_silent_server
+
+
+@pytest.fixture
+def fake_rfc2217_server() -> Iterator[FakeRfc2217Server]:
+    """Fake RFC 2217 server for a single client."""
+    with create_rfc2217_server() as server:
+        yield server
+
+
+async def wait_until(condition: Callable[[], bool]) -> None:
+    """Wait until a condition becomes true."""
+
+    async def poll() -> None:
+        while not condition():
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(poll(), 2)
 
 
 def test_unknown_telnet_option() -> None:
@@ -157,3 +177,28 @@ async def test_async_negotiate_comport_rejected_by_hub4com(
                 baudrate=115200,
                 connect_timeout=1.0,
             )
+
+
+async def test_async_close_timeout_bounds_flush(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """close() aborts after `close_timeout` when the server never acks its flush."""
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        asyncio.Protocol,
+        url=fake_rfc2217_server.url,
+        baudrate=115200,
+        close_timeout=0.2,
+    )
+
+    fake_rfc2217_server.unacked_cmd_ids = {Rfc2217CmdId.SET_BAUDRATE}
+    transport.write(b"data")
+
+    # Let the data leave our own TCP buffer
+    await wait_until(lambda: transport.get_write_buffer_size() == 0)
+    transport.close()
+
+    with measure_time() as elapsed:
+        await asyncio.wait_for(transport.wait_closed(), 2)
+
+    assert 0.15 <= elapsed() < 1.0
