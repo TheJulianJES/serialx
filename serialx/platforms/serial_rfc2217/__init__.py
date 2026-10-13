@@ -736,7 +736,8 @@ class RFC2217SerialTransport(BaseSerialTransport):
         self._tcp_connection_lost_waiter: asyncio.Future[None] | None = None
         self._close_task: asyncio.Task[None] | None = None
         self._needs_flush = False
-        # Data the device sent before the protocol was told about the transport
+        # Data the device sent before the protocol was told about the transport, `None`
+        # once it has all been delivered
         self._pending_data: list[bytes] | None = []
 
     # -- connection lifecycle -----------------------------------------------
@@ -778,10 +779,21 @@ class RFC2217SerialTransport(BaseSerialTransport):
         # The server can forward device data as soon as the TCP connection is up, while
         # the protocol only learns of the transport once the port is configured. Replay
         # what arrived in between so the protocol never sees data first.
-        pending_data, self._pending_data = self._pending_data, None
-        assert pending_data is not None
-        for data in pending_data:
-            self._protocol.data_received(data)
+        self._deliver_pending_data()
+
+    def _deliver_pending_data(self) -> None:
+        """Deliver data buffered before `connection_made`, honoring pause and close."""
+        while self._pending_data:
+            if self._closing:
+                break
+
+            # Keep the rest for `resume_reading()` if the protocol paused reading
+            if self._tcp_transport is not None and not self._tcp_transport.is_reading():
+                return
+
+            self._protocol.data_received(self._pending_data.pop(0))
+
+        self._pending_data = None
 
     async def _negotiate(self) -> None:
         """Perform the initial WILL/DO handshake for COM-PORT-OPTION."""
@@ -894,8 +906,7 @@ class RFC2217SerialTransport(BaseSerialTransport):
 
         if self._pending_data is not None:
             LOGGER.debug(
-                "Data received before connection made, buffering (%d bytes)",
-                len(serial_data),
+                "Buffering %d bytes until earlier data is delivered", len(serial_data)
             )
             self._pending_data.append(serial_data)
             return
@@ -1027,6 +1038,9 @@ class RFC2217SerialTransport(BaseSerialTransport):
         """Resume reading from the TCP transport."""
         assert self._tcp_transport is not None
         self._tcp_transport.resume_reading()
+
+        if self._pending_data is not None:
+            self._loop.call_soon(self._deliver_pending_data)
 
     def close(self) -> None:
         """Close the transport, draining buffered writes to the server first."""

@@ -144,6 +144,73 @@ async def test_async_data_before_connection_made_is_delivered() -> None:
             await transport.wait_closed()
 
 
+# Serial data sent along with two different port configuration acks
+EARLY_DATA: dict[int, bytes] = {
+    Rfc2217CmdId.SET_BAUDRATE: b"first",
+    Rfc2217CmdId.SET_CONTROL: b"early",
+}
+
+
+async def test_async_data_before_connection_made_honors_pause() -> None:
+    """Buffered early data waits for `resume_reading()` if `connection_made` paused."""
+    events: list[str | bytes] = []
+
+    class Protocol(asyncio.Protocol):
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            assert isinstance(transport, asyncio.ReadTransport)
+            transport.pause_reading()
+            events.append("connection_made")
+
+        def data_received(self, data: bytes) -> None:
+            events.append(data)
+
+    with create_rfc2217_server(after_ack=EARLY_DATA) as server:
+        transport, _ = await create_serial_connection(
+            asyncio.get_running_loop(), Protocol, url=server.url, baudrate=115200
+        )
+
+        try:
+            await asyncio.sleep(0.1)
+            assert events == ["connection_made"]
+
+            transport.resume_reading()
+
+            while len(events) < 3:
+                await asyncio.sleep(0.01)
+
+            assert events == ["connection_made", b"first", b"early"]
+        finally:
+            transport.close()
+            await transport.wait_closed()
+
+
+@pytest.mark.parametrize("method", ["close", "abort"])
+async def test_async_data_before_connection_made_dropped_on_close(
+    method: str,
+) -> None:
+    """Buffered early data isn't delivered once `connection_made` closed the port."""
+    events: list[str | bytes] = []
+
+    class Protocol(asyncio.Protocol):
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            events.append("connection_made")
+            getattr(transport, method)()
+
+        def data_received(self, data: bytes) -> None:
+            events.append(data)
+
+        def connection_lost(self, exc: Exception | None) -> None:
+            events.append("connection_lost")
+
+    with create_rfc2217_server(after_ack=EARLY_DATA) as server:
+        transport, _ = await create_serial_connection(
+            asyncio.get_running_loop(), Protocol, url=server.url, baudrate=115200
+        )
+        await transport.wait_closed()
+
+    assert events == ["connection_made", "connection_lost"]
+
+
 def test_sync_peer_close_during_negotiation_raises() -> None:
     """Peer-side TCP close surfaces as OSError, not a silent 0-byte read."""
     with create_accept_then_close_server() as addr:
