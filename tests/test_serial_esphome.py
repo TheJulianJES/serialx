@@ -20,6 +20,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 import urllib.parse
 import warnings
 
+from aioesphomeapi.core import TimeoutAPIError
 from aioesphomeapi.model import (
     APIVersion,
     DeviceInfo,
@@ -1715,3 +1716,43 @@ async def test_refused_subscribe_is_not_released() -> None:
 
     assert excinfo.value.errno == errno.EBUSY
     assert len(api.serial_proxy_unsubscribe.mock_calls) == 0
+
+
+def test_sync_open_after_unanswered_subscribe_claims_again() -> None:
+    """A retried open on a shared client subscribes and sets the mode afresh."""
+    api_loop = asyncio.new_event_loop()
+    api_thread = threading.Thread(target=api_loop.run_forever, daemon=True)
+    api_thread.start()
+
+    async def create_api() -> MagicMock:
+        return mock_api_client("Zigbee")
+
+    api = asyncio.run_coroutine_threadsafe(create_api(), api_loop).result()
+    api.serial_proxy_subscribe_await_response.side_effect = [
+        TimeoutAPIError("Timeout waiting for SerialProxyRequestResponse"),
+        None,
+    ]
+
+    serial = ESPHomeSerial(
+        api=api, port_name="Zigbee", mode="protocol", baudrate=115200
+    )
+
+    try:
+        with pytest.raises(TimeoutError):
+            serial.open()
+
+        # The unanswered claim was released right away, without waiting for a close
+        assert api.serial_proxy_unsubscribe.mock_calls == [call(0)]
+
+        serial.open()
+        assert serial.tap_mode is SerialProxyModeName.PROTOCOL
+        serial.close()
+    finally:
+        api_loop.call_soon_threadsafe(api_loop.stop)
+        api_thread.join(timeout=5)
+        api_loop.close()
+
+    assert len(api.serial_proxy_subscribe_await_response.mock_calls) == 2
+    assert api.serial_proxy_set_mode_await_response.mock_calls == [
+        call(instance=0, mode=SerialProxyMode.PROTOCOL, timeout=ANY)
+    ]
