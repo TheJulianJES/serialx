@@ -224,6 +224,58 @@ async def test_lifecycle_cancel_during_connect_no_callbacks(
     protocol.assert_clean()
 
 
+async def test_lifecycle_cancel_while_waiting_for_connection_made(
+    serial_pair: SerialPair,
+) -> None:
+    """Cancel once the proactor pipe transport exists: no hang, no callbacks."""
+    loop = asyncio.get_running_loop()
+    protocol = RecordingProtocol()
+
+    make_transport = getattr(loop, "_make_duplex_pipe_transport", None)
+    if make_transport is None:
+        pytest.skip("Only the Win32 transport wraps a proactor pipe transport")
+
+    created = False
+
+    def make_transport_then_cancel(*args: Any, **kwargs: Any) -> Any:
+        nonlocal created
+        created = True
+        transport = make_transport(*args, **kwargs)
+
+        # Like a timeout firing before the deferred `connection_made` callback runs
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+
+        return transport
+
+    with patch.object(loop, "_make_duplex_pipe_transport", make_transport_then_cancel):
+        connect_task = asyncio.create_task(
+            create_serial_connection(
+                loop, lambda: protocol, serial_pair.left, baudrate=115200
+            )
+        )
+        done, _ = await asyncio.wait({connect_task}, timeout=5)
+
+    if not created:
+        transport, _ = await connect_task
+        transport.close()
+        await transport.wait_closed()
+        pytest.skip("Backend does not use a proactor pipe transport")
+
+    assert connect_task in done, "connect() hung after being cancelled"
+    assert connect_task.cancelled()
+    assert protocol.state is ProtocolState.INIT
+    protocol.assert_clean()
+
+    # The port was released, so it can be opened again
+    transport, _ = await create_serial_connection(
+        loop, asyncio.Protocol, serial_pair.left, baudrate=115200
+    )
+    transport.close()
+    await transport.wait_closed()
+
+
 # --- Idempotency under repeated close/abort ---
 
 

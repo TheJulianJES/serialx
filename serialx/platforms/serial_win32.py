@@ -557,6 +557,13 @@ class Win32SerialTransport(BaseSerialTransport):
     def protocol_connection_made(self, transport: asyncio.Transport) -> None:
         """Forward connection_made to the protocol."""
 
+        # `connect()` was cancelled before this deferred callback ran
+        if (
+            self._connection_made_waiter is not None
+            and self._connection_made_waiter.cancelled()
+        ):
+            return
+
         # Ignore `transport` and pass self instead
         self._call_protocol_connection_made()
 
@@ -728,11 +735,17 @@ class Win32SerialTransport(BaseSerialTransport):
             # call_soon. Wait for it so callers can assume MADE upon return.
             await self._connection_made_waiter
         except BaseException:
-            if self._handle is not None:
-                await self._loop.run_in_executor(None, _safe_close_handle, self._handle)
+            # Once the internal transport exists, it owns the handle: `connect()` closes
+            # it, which releases the handle through `serial_close`
+            if self._internal_transport is None:
+                if self._handle is not None:
+                    await self._loop.run_in_executor(
+                        None, _safe_close_handle, self._handle
+                    )
 
-            self._serial = None
-            self._handle = None
+                self._serial = None
+                self._handle = None
+
             raise
         finally:
             self._connect_in_progress = False
