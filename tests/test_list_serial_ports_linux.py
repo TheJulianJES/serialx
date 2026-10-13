@@ -59,6 +59,54 @@ def test_replay_debian_12_kernel_6_1(
     ]
 
 
+def test_replay_debian_12_kernel_6_1_pci(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Pre-6.10 kernel: two `8250_pci` UARTs on `pci` (synthesized from Debian 12)."""
+    with caplog.at_level(logging.WARNING):
+        dev_root, ports = _list_ports(tmp_path, "debian-12-6.1-pci.umockdev")
+    assert not caplog.text
+
+    assert ports == [
+        SerialPortInfo(
+            device=str(dev_root / "ttyS0"),
+            resolved_device=str(dev_root / "ttyS0"),
+            vid=None,
+            pid=None,
+            serial_number=None,
+            manufacturer=None,
+            product=None,
+            bcd_device=None,
+            interface_description=None,
+            interface_num=None,
+        ),
+        SerialPortInfo(
+            device=str(dev_root / "ttyS4"),
+            resolved_device=str(dev_root / "ttyS4"),
+            vid=None,
+            pid=None,
+            serial_number=None,
+            manufacturer=None,
+            product=None,
+            bcd_device=None,
+            interface_description=None,
+            interface_num=None,
+        ),
+        SerialPortInfo(
+            device=str(dev_root / "ttyS5"),
+            resolved_device=str(dev_root / "ttyS5"),
+            vid=None,
+            pid=None,
+            serial_number=None,
+            manufacturer=None,
+            product=None,
+            bcd_device=None,
+            interface_description=None,
+            interface_num=None,
+        ),
+    ]
+
+
 def test_replay_debian_13_kernel_6_12(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -365,21 +413,35 @@ def test_list_serial_ports_native_device_disappears(tmp_path: Path) -> None:
     assert names == baseline_names - {"ttyAMA0"}
 
 
-def test_list_serial_ports_unknown_subsystem(
+def test_list_serial_ports_other_subsystem(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Test that devices with unknown subsystems are skipped with a warning."""
+    """Test that `serial_core` ports on other buses (e.g. `spi`) are listed."""
     sys_root, dev_root = load_umockdev(tmp_path, DATA_DIR / "haos-yellow-6.6.umockdev")
 
-    # Repoint ttyAMA0's parent at a fabricated bus name that the code doesn't
-    # recognize.
+    # Repoint ttyAMA0's parent at a bus name that the code doesn't special-case
     parent = sys_root / "devices/platform/axi/1000120000.pcie/1f00030000.serial"
     (parent / "subsystem").unlink()
-    (sys_root / "bus/some-unknown-bus").mkdir(parents=True)
-    (parent / "subsystem").symlink_to(sys_root / "bus/some-unknown-bus")
+    (sys_root / "bus/spi").mkdir(parents=True)
+    (parent / "subsystem").symlink_to(sys_root / "bus/spi")
 
     with (
-        caplog.at_level(logging.WARNING),
+        caplog.at_level(logging.DEBUG),
+        patch.object(serial_linux, "SYS_ROOT", sys_root),
+        patch.object(serial_linux, "DEV_ROOT", dev_root),
+    ):
+        ports = linux_list_serial_ports()
+
+    names = {Path(p.resolved_device).name for p in ports}
+    assert "ttyAMA0" in names
+    assert "ttyAMA0" not in caplog.text
+
+    # Without a `type`, it's not a `serial_core` port and is skipped
+    (parent / "tty/ttyAMA0/type").unlink()
+    caplog.clear()
+
+    with (
+        caplog.at_level(logging.DEBUG),
         patch.object(serial_linux, "SYS_ROOT", sys_root),
         patch.object(serial_linux, "DEV_ROOT", dev_root),
     ):
@@ -387,7 +449,8 @@ def test_list_serial_ports_unknown_subsystem(
 
     names = {Path(p.resolved_device).name for p in ports}
     assert "ttyAMA0" not in names
-    assert "Unknown serial device subsystem 'some-unknown-bus'" in caplog.text
+    assert "with subsystem 'spi' and no port type" in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 def test_list_serial_ports_missing_subsystem(

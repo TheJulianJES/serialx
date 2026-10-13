@@ -437,17 +437,24 @@ def linux_list_serial_ports() -> list[SerialPortInfo]:
                 interface_description=_read_optional_sysfs(usb_interface / "interface"),
                 interface_num=interface_num,
             )
-        elif subsystem in ("serial-base", "platform", "pnp", "amba"):
-            # `serial-base` is the per-port subsystem introduced in Linux 6.10.
-            # Older kernels expose native ports through their bus directly:
-            #   `platform` - 8250 placeholders, RP1 `pl011-axi`, most ARM SoCs
-            #   `pnp`      - PnP-discovered 16550A on x86
-            #   `amba`     - ARM PrimeCell UART (`uart-pl011`) on BCM2712 etc.
-            # All four expose `/sys/class/tty/<tty>/type`.
+        else:
+            # `serial-base` is the per-port subsystem introduced in Linux 6.10. Older
+            # kernels expose native ports through their bus directly:
+            #   `platform`  - 8250 placeholders, RP1 `pl011-axi`, most ARM SoCs
+            #   `pnp`       - PnP-discovered 16550A on x86
+            #   `amba`      - ARM PrimeCell UART (`uart-pl011`) on BCM2712 etc.
+            #   `pci`       - PCI(e) UARTs (`8250_pci`, `8250_exar`, etc.)
+            #   `spi`/`i2c` - SC16IS7xx, MAX310x, etc.
+            # Only `serial_core` ports expose `/sys/class/tty/<tty>/type`, other tty
+            # drivers are skipped.
             try:
                 port_type = (path / "type").read_text()
             except OSError:
-                LOGGER.debug("Port %r disappeared during iteration", device)
+                LOGGER.debug(
+                    "Skipping device %r with subsystem %r and no port type",
+                    device,
+                    subsystem,
+                )
                 continue
 
             if int(port_type) == PORT_UNKNOWN:
@@ -466,13 +473,6 @@ def linux_list_serial_ports() -> list[SerialPortInfo]:
                 interface_description=None,
                 interface_num=None,
             )
-        else:
-            LOGGER.warning(
-                "Unknown serial device subsystem %r for device %r",
-                subsystem,
-                device,
-            )
-            continue
 
         results.append(info)
 
