@@ -62,7 +62,10 @@ def test_replay_debian_12_kernel_6_1(
 def test_replay_debian_12_kernel_6_1_pci(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Pre-6.10 kernel: two `8250_pci` UARTs on `pci` (synthesized from Debian 12)."""
+    """Pre-6.10 kernel: two `8250_pci` UARTs on `pci` (synthesized from Debian 12).
+
+    The PCI ports take over the first two `serial8250` placeholders, ttyS1 and ttyS2.
+    """
     with caplog.at_level(logging.WARNING):
         dev_root, ports = _list_ports(tmp_path, "debian-12-6.1-pci.umockdev")
     assert not caplog.text
@@ -81,8 +84,8 @@ def test_replay_debian_12_kernel_6_1_pci(
             interface_num=None,
         ),
         SerialPortInfo(
-            device=str(dev_root / "ttyS4"),
-            resolved_device=str(dev_root / "ttyS4"),
+            device=str(dev_root / "ttyS1"),
+            resolved_device=str(dev_root / "ttyS1"),
             vid=None,
             pid=None,
             serial_number=None,
@@ -93,8 +96,8 @@ def test_replay_debian_12_kernel_6_1_pci(
             interface_num=None,
         ),
         SerialPortInfo(
-            device=str(dev_root / "ttyS5"),
-            resolved_device=str(dev_root / "ttyS5"),
+            device=str(dev_root / "ttyS2"),
+            resolved_device=str(dev_root / "ttyS2"),
             vid=None,
             pid=None,
             serial_number=None,
