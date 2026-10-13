@@ -77,8 +77,10 @@ are listed in the [main API documentation](../api.md). The most common ones are 
 | `bytesize = X`              | `reconfigure_port(byte_size=X)` | Setters are deprecated                  |
 | `stopbits = X`              | `reconfigure_port(stopbits=X)` | Setters are deprecated                   |
 | `parity = X`                | `reconfigure_port(parity=X)` | Setters are deprecated                     |
-| `xonxoff = X`, `rtscts = X`, `dsrdtr = X` | `reconfigure_port(xonxoff=X)`, ... | Setters are deprecated   |
-| `port = X`                  | `path=X`                   | Constructor kwarg; setter only works on a closed port and is deprecated |
+| `xonxoff = X`               | `reconfigure_port(xonxoff=X)` | Setters are deprecated                    |
+| `rtscts = X`                | `reconfigure_port(rtscts=X)` | Setters are deprecated                     |
+| `dsrdtr = X`                | `reconfigure_port(dsrdtr=X)` | Setters are deprecated                     |
+| `port = X`                  | `path=X`                   | Setter is deprecated, reopens an open port   |
 | `SerialPortInfo[i]`         | attribute access           | Slicing `SerialPortInfo` is deprecated       |
 | `SerialPortInfo.description`| `SerialPortInfo.product`   |                                              |
 
