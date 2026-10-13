@@ -1,7 +1,9 @@
 """RFC2217 serial port tests."""
 
 import asyncio
+from collections.abc import Iterator
 import sys
+import threading
 
 import pytest
 
@@ -21,13 +23,22 @@ from serialx.platforms.serial_rfc2217.types import (
     ModemStateFlag,
     NotifyLinestateCmd,
     NotifyModemstateCmd,
+    Rfc2217CmdId,
     SignatureCmd,
     TelnetOption,
     WillCmd,
 )
 
 from .common import HUB4COM_BINARY, SerialBackend, SerialPair, create_hub4com_pair
+from .rfc2217_server import FakeRfc2217Server, create_rfc2217_server
 from .socket_relay import create_accept_then_close_server, create_silent_server
+
+
+@pytest.fixture
+def fake_rfc2217_server() -> Iterator[FakeRfc2217Server]:
+    """Fake RFC 2217 server for a single client."""
+    with create_rfc2217_server() as server:
+        yield server
 
 
 def test_unknown_telnet_option() -> None:
@@ -157,3 +168,102 @@ async def test_async_negotiate_comport_rejected_by_hub4com(
                 baudrate=115200,
                 connect_timeout=1.0,
             )
+
+
+@pytest.mark.parametrize("read_timeout", [0, 0.01])
+def test_sync_commands_ignore_read_timeout(
+    fake_rfc2217_server: FakeRfc2217Server, read_timeout: float
+) -> None:
+    """Commands wait for their acks with the connect timeout, not the read timeout."""
+    with Serial.from_url(
+        fake_rfc2217_server.url, baudrate=115200, read_timeout=read_timeout
+    ) as serial:
+        fake_rfc2217_server.hold_acks = True
+        stop = threading.Event()
+
+        def release_acks() -> None:
+            while not stop.wait(0.1):
+                fake_rfc2217_server.release_acks()
+
+        thread = threading.Thread(target=release_acks, daemon=True)
+        thread.start()
+
+        try:
+            serial.write(b"data")
+            serial.flush()
+            serial.dtr = False
+            serial.rts = True
+            serial.reset_read_buffer()
+            serial.reset_write_buffer()
+        finally:
+            stop.set()
+            thread.join()
+
+
+@pytest.mark.parametrize("write_timeout", [None, 1.0])
+def test_sync_flush_waits_for_slow_ack(
+    fake_rfc2217_server: FakeRfc2217Server, write_timeout: float | None
+) -> None:
+    """flush() waits for the server to drain to the device, not `connect_timeout`."""
+    with Serial.from_url(
+        fake_rfc2217_server.url,
+        baudrate=115200,
+        connect_timeout=0.2,
+        write_timeout=write_timeout,
+    ) as serial:
+        fake_rfc2217_server.hold_acks = True
+        serial.write(b"data")
+
+        # The server only acks the flush once the device took the data
+        timer = threading.Timer(0.5, fake_rfc2217_server.release_acks)
+        timer.start()
+
+        try:
+            serial.flush()
+        finally:
+            timer.join()
+
+
+def test_sync_flush_honors_write_timeout(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """flush() gives up after `write_timeout` when the server never acks it."""
+    with Serial.from_url(
+        fake_rfc2217_server.url, baudrate=115200, write_timeout=0.2
+    ) as serial:
+        fake_rfc2217_server.unacked_cmd_ids = {Rfc2217CmdId.SET_BAUDRATE}
+        serial.write(b"data")
+
+        with measure_time() as elapsed:
+            with pytest.raises(TimeoutError):
+                serial.flush()
+
+        assert 0.15 <= elapsed() < 1.0
+
+
+def test_sync_command_timeout_is_a_deadline(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """Serial data arriving while waiting for an ack doesn't extend the wait."""
+    with Serial.from_url(
+        fake_rfc2217_server.url, baudrate=115200, connect_timeout=0.3
+    ) as serial:
+        fake_rfc2217_server.unacked_cmd_ids = {Rfc2217CmdId.SET_CONTROL}
+        stop = threading.Event()
+
+        def stream_data() -> None:
+            while not stop.wait(0.05):
+                fake_rfc2217_server.send(b"x")
+
+        thread = threading.Thread(target=stream_data, daemon=True)
+        thread.start()
+
+        try:
+            with measure_time() as elapsed:
+                with pytest.raises(TimeoutError):
+                    serial.dtr = True
+        finally:
+            stop.set()
+            thread.join()
+
+        assert 0.25 <= elapsed() < 1.0

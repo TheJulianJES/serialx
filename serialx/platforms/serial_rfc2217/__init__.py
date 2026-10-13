@@ -473,8 +473,7 @@ class RFC2217Serial(SocketSerial):
         LOGGER.debug("Negotiation complete: server accepted COM-PORT-OPTION")
 
         for cmd in self._engine.build_state_mask_commands():
-            with self._socket_timeout(self._connect_timeout):
-                self._send_and_wait(cmd)
+            self._send_and_wait(cmd, timeout=self._connect_timeout)
 
     def _build_port_config_commands(
         self, update: PortSettingsUpdate
@@ -500,8 +499,7 @@ class RFC2217Serial(SocketSerial):
         LOGGER.debug("Configuring port: %s", update)
 
         for cmd in self._build_port_config_commands(update):
-            with self._socket_timeout(self._connect_timeout):
-                self._send_and_wait(cmd)
+            self._send_and_wait(cmd, timeout=self._connect_timeout)
 
         LOGGER.debug("Port configuration complete")
 
@@ -573,12 +571,23 @@ class RFC2217Serial(SocketSerial):
         LOGGER.debug("Read %d bytes from data buffer", n)
         return n
 
-    def _send_and_wait(self, cmd: Rfc2217Command) -> Rfc2217Command:
-        """Send a command and block until the matching server ack arrives."""
+    def _send_and_wait(
+        self, cmd: Rfc2217Command, *, timeout: float | None
+    ) -> Rfc2217Command:
+        """Send a command and block until the matching server ack arrives.
+
+        ``timeout`` bounds the whole wait in seconds, ``None`` waits indefinitely.
+        """
         cmd_id = cmd.CMD_ID
-        self._send_command(cmd)
+
+        with self._socket_timeout(timeout):
+            self._send_command(cmd)
+
         LOGGER.debug("Waiting for %s ack...", type(cmd).__name__)
 
+        # Serial data and notifications may keep arriving without the ack, so
+        # bound the wait as a whole instead of each read
+        remaining_timeout = timeout
         while True:
             pending = self._engine.pop_pending_rfc2217(cmd_id)
 
@@ -586,7 +595,17 @@ class RFC2217Serial(SocketSerial):
                 LOGGER.debug("RX ack: %r", pending)
                 return pending
 
-            self._recv_and_process()
+            if remaining_timeout is not None and remaining_timeout <= 0:
+                raise TimeoutError(f"Timed out waiting for {type(cmd).__name__} ack")
+
+            with (
+                measure_time() as get_elapsed,
+                self._socket_timeout(remaining_timeout),
+            ):
+                self._recv_and_process()
+
+            if remaining_timeout is not None:
+                remaining_timeout -= get_elapsed()
 
     def num_unread_bytes(self) -> int:
         """Return the number of buffered serial data bytes waiting to be read."""
@@ -594,11 +613,15 @@ class RFC2217Serial(SocketSerial):
 
     def _reset_write_buffer(self) -> None:
         """Reset the write buffer."""
-        self._send_and_wait(PurgeDataCmd(what=PurgeDataValue.RECEIVE))
+        self._send_and_wait(
+            PurgeDataCmd(what=PurgeDataValue.RECEIVE), timeout=self._connect_timeout
+        )
 
     def _reset_read_buffer(self) -> None:
         """Reset the read buffer."""
-        self._send_and_wait(PurgeDataCmd(what=PurgeDataValue.TRANSMIT))
+        self._send_and_wait(
+            PurgeDataCmd(what=PurgeDataValue.TRANSMIT), timeout=self._connect_timeout
+        )
         self._data_buffer.clear()
 
     def _write(self, b: Buffer, *, timeout: float | None) -> int:
@@ -672,7 +695,7 @@ class RFC2217Serial(SocketSerial):
         LOGGER.debug("Setting modem pins: %r", modem_pins)
 
         for cmd in self._engine.build_modem_pin_commands(modem_pins):
-            self._send_and_wait(cmd)
+            self._send_and_wait(cmd, timeout=self._connect_timeout)
 
     def _get_modem_pins(self) -> ModemPins:
         """Return modem pin state from the last NOTIFY-MODEMSTATE."""
@@ -690,7 +713,11 @@ class RFC2217Serial(SocketSerial):
             return
 
         # RFC2217 has no flush. Instead, we "flush" the pipe with a req/rsp sequence.
-        self._send_and_wait(SetBaudrateCmd(baudrate=self._baudrate))
+        # The server only acks once it has drained everything written before, which
+        # takes as long as the device needs, so wait like a blocking write would.
+        self._send_and_wait(
+            SetBaudrateCmd(baudrate=self._baudrate), timeout=self._write_timeout
+        )
 
 
 class _RFC2217ProxyProtocol(asyncio.Protocol):
