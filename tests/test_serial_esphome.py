@@ -1651,3 +1651,16 @@ def test_sync_api_calls_client_on_its_loop() -> None:
         ("unsubscribe", loop_thread),
     ]
     assert len(api.disconnect.mock_calls) == 1
+
+
+async def test_sync_open_on_client_loop_raises() -> None:
+    """Sync calls from the loop an external `APIClient` runs on raise, not deadlock."""
+    api = mock_api_client("Zigbee")
+    serial = ESPHomeSerial(api=api, port_name="Zigbee", baudrate=115200)
+
+    with pytest.raises(RuntimeError, match="sync ESPHomeSerial method"):
+        serial.open()
+
+    # The failed open stopped the loop thread it started
+    assert serial._loop_thread is None
+    assert len(api.serial_proxy_subscribe_await_response.mock_calls) == 0

@@ -363,13 +363,17 @@ class ESPHomeSerial(BaseSerial):
         self._last_line_states = LineStateFlag(0)
 
     def _in_event_loop(self) -> bool:
-        """Check if we are currently running in the event loop."""
+        """Check if we are running in the event loop or in the `APIClient`'s loop."""
         assert self._loop is not None
 
         try:
-            return asyncio.get_running_loop() is self._loop
+            running_loop = asyncio.get_running_loop()
         except RuntimeError:
             return False
+
+        # Blocking the client's loop deadlocks just the same: every request made on
+        # `self._loop` has to be answered there
+        return running_loop is self._loop or running_loop is self._client_loop
 
     def _call_on_loop(self, coro: Coroutine[Any, Any, _T]) -> _T:
         """Dispatch a coroutine to the event loop thread and block."""
@@ -382,7 +386,7 @@ class ESPHomeSerial(BaseSerial):
             coro.close()
             raise RuntimeError(
                 "Cannot call this sync ESPHomeSerial method from its own event "
-                "loop thread; use the async API instead."
+                "loop thread or its API client's; use the async API instead."
             )
 
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
