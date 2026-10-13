@@ -3,6 +3,8 @@
 import asyncio
 from collections.abc import Callable, Iterator
 import sys
+import threading
+import time
 
 import pytest
 
@@ -14,7 +16,11 @@ if sys.platform == "emscripten":
 
 from serialx import Serial, SerialException, create_serial_connection
 from serialx.common import PortSettingsUpdate, UnsupportedSetting, measure_time
-from serialx.platforms.serial_rfc2217 import Rfc2217
+from serialx.platforms.serial_rfc2217 import (
+    Rfc2217,
+    RFC2217Serial,
+    RFC2217SerialTransport,
+)
 from serialx.platforms.serial_rfc2217.types import (
     FlowcontrolResumeCmd,
     FlowcontrolSuspendCmd,
@@ -22,6 +28,7 @@ from serialx.platforms.serial_rfc2217.types import (
     ModemStateFlag,
     NotifyLinestateCmd,
     NotifyModemstateCmd,
+    SetBaudrateCmd,
     SignatureCmd,
     TelnetOption,
     WillCmd,
@@ -228,3 +235,73 @@ async def test_async_connection_loss_fails_all_pending_commands(
     )
 
     assert all(isinstance(result, OSError) for result in results)
+
+
+def test_sync_late_ack_not_attributed_to_next_command(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """The ack of a timed out command is not mistaken for the next one's."""
+    with Serial.from_url(
+        fake_rfc2217_server.url,
+        baudrate=115200,
+        read_timeout=0.5,
+        connect_timeout=0.5,
+    ) as serial:
+        assert isinstance(serial, RFC2217Serial)
+        fake_rfc2217_server.hold_acks = True
+
+        with pytest.raises(TimeoutError):
+            serial._send_and_wait(SetBaudrateCmd(baudrate=1200))
+
+        def release_acks_separately() -> None:
+            while fake_rfc2217_server.num_held_acks < 2:
+                time.sleep(0.01)
+
+            # The late ack arrives while the client waits for the second one
+            fake_rfc2217_server.release_acks(1)
+            time.sleep(0.1)
+            fake_rfc2217_server.release_acks(1)
+
+        thread = threading.Thread(target=release_acks_separately, daemon=True)
+        thread.start()
+
+        ack = serial._send_and_wait(SetBaudrateCmd(baudrate=2400))
+        assert ack == SetBaudrateCmd(baudrate=2400)
+        thread.join()
+
+
+async def test_async_late_ack_not_attributed_to_next_command(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """The ack of a cancelled command is not mistaken for the next one's."""
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        asyncio.Protocol,
+        url=fake_rfc2217_server.url,
+        baudrate=115200,
+    )
+    assert isinstance(transport, RFC2217SerialTransport)
+
+    fake_rfc2217_server.hold_acks = True
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            transport._send_and_wait(SetBaudrateCmd(baudrate=1200)), 0.1
+        )
+
+    command = asyncio.create_task(
+        transport._send_and_wait(SetBaudrateCmd(baudrate=2400))
+    )
+    await wait_until(lambda: fake_rfc2217_server.num_held_acks == 2)
+
+    # The late ack arrives while the client waits for the second one
+    fake_rfc2217_server.release_acks(1)
+    await asyncio.sleep(0.1)
+    assert not command.done()
+
+    fake_rfc2217_server.release_acks(1)
+    ack = await asyncio.wait_for(command, 2)
+    assert ack == SetBaudrateCmd(baudrate=2400)
+
+    transport.close()
+    await transport.wait_closed()

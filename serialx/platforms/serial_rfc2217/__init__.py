@@ -235,6 +235,7 @@ class Rfc2217AckWaiter:
 
     cmd: Rfc2217Command
     ack: Rfc2217Command | None = None
+    abandoned: bool = False
 
 
 class Rfc2217:
@@ -295,9 +296,9 @@ class Rfc2217:
 
     def abandon_ack(self, waiter: Rfc2217AckWaiter) -> None:
         """Stop waiting for the ack of a request."""
-        waiters = self._ack_waiters.get(waiter.cmd.CMD_ID)
-        if waiters is not None and waiter in waiters:
-            waiters.remove(waiter)
+        # Keep it queued: its ack may still arrive and must not be mistaken for
+        # the ack of a later request of the same type
+        waiter.abandoned = True
 
     def _resolve_ack(self, ack: Rfc2217Command) -> None:
         """Hand an ack to the oldest request of its type."""
@@ -308,7 +309,12 @@ class Rfc2217:
             LOGGER.debug("Ignoring unsolicited %r", ack)
             return
 
-        waiters.popleft().ack = ack
+        waiter = waiters.popleft()
+        if waiter.abandoned:
+            LOGGER.debug("Discarding late ack %r", ack)
+            return
+
+        waiter.ack = ack
 
     def build_port_config_commands(
         self, update: PortSettingsUpdate
