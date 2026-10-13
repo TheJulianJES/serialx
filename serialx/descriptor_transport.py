@@ -238,21 +238,31 @@ class DescriptorTransport(BaseSerialTransport):
         """Get the number of bytes currently in the write buffer."""
         return len(self._buffer)
 
-    def _make_empty_waiter(self) -> asyncio.Future[None]:
-        """Create a future that resolves when the write buffer is empty."""
-        waiter = self._loop.create_future()
-        if self._buffer:
-            self._empty_waiters.append(waiter)
-        else:
-            waiter.set_result(None)
-        return waiter
+    async def _wait_for_empty_buffer(self) -> None:
+        """Wait until the write buffer is empty.
+
+        Raises the error that closed the transport if it is closed before the buffer is
+        written out, or `ConnectionAbortedError` if it was aborted.
+        """
+        if not self._buffer:
+            return
+
+        waiter: asyncio.Future[None] = self._loop.create_future()
+        self._empty_waiters.append(waiter)
+
+        try:
+            await waiter
+        finally:
+            # Resolved waiters are already removed, cancelled ones are not
+            if waiter in self._empty_waiters:
+                self._empty_waiters.remove(waiter)
 
     def _wake_empty_waiters(self, exc: BaseException | None = None) -> None:
         """Resolve all pending empty waiters, failing them if `exc` is set."""
         waiters, self._empty_waiters = self._empty_waiters, []
 
         for waiter in waiters:
-            # Waiters of cancelled flushes are already done
+            # A cancelled flush may not have removed its waiter yet
             if waiter.done():
                 continue
             if exc is None:
@@ -429,8 +439,16 @@ class DescriptorTransport(BaseSerialTransport):
             self._buffer.clear()
             self._loop.remove_reader(self._fileno)
 
-        # Buffered data was discarded, nothing is left to wait for
-        self._wake_empty_waiters(exc)
+        # Buffered data was discarded, so pending flushes fail
+        if self._empty_waiters:
+            self._wake_empty_waiters(
+                exc
+                if exc is not None
+                else ConnectionAbortedError(
+                    "transport closed before the write buffer was flushed"
+                )
+            )
+
         self._maybe_background_close(exc)
 
     def _maybe_background_close(self, exc: Exception | None) -> None:

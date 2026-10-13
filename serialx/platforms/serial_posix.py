@@ -559,14 +559,20 @@ class PosixSerialTransport(DescriptorTransport):
         self._call_protocol_connection_made()
 
     async def _flush(self) -> None:
-        """Flush write buffers, waiting until all data is written, internal."""
+        """Flush write buffers, waiting until all data is written, internal.
+
+        Raises `ConnectionAbortedError` if the transport is aborted before the write
+        buffer is written out. If it is closing, this waits for the close to finish.
+        """
         assert self._serial is not None
 
         # Wait for internal buffer to drain
-        await self._make_empty_waiter()
+        await self._wait_for_empty_buffer()
 
-        # The background close task owns the file descriptor now
+        # The background close task owns the file descriptor now and closing it also
+        # waits for the output to drain
         if self._closing:
+            await asyncio.shield(self._closed_waiter)
             return
 
         # Wait for hardware buffer to flush (with timeout)

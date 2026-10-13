@@ -15,10 +15,12 @@ import errno
 import os
 import termios
 import threading
+import time
 from typing import Any
 from unittest.mock import patch
 
 from serialx import ModemPins, PinState, create_serial_connection
+from serialx.descriptor_transport import _safe_close
 from serialx.platforms.serial_posix import PosixSerial, PosixSerialTransport
 
 
@@ -236,7 +238,7 @@ async def test_async_flush_write_during_tcdrain(pty_transport: PtyTransport) -> 
     with patch.object(transport._serial, "flush", side_effect=slow_tcdrain):
         flush = asyncio.create_task(transport.flush())
         await _drain_pty_until_empty(transport, master)
-        await loop.run_in_executor(None, in_tcdrain.wait, 5)
+        assert await loop.run_in_executor(None, in_tcdrain.wait, 5)
         protocol.resume_writing_calls = 0
 
         # The protocol is paused by this write and resumed once it drains
@@ -259,7 +261,7 @@ async def test_async_flush_write_during_tcdrain(pty_transport: PtyTransport) -> 
 
 
 async def test_async_flush_abort(pty_transport: PtyTransport) -> None:
-    """`abort()` while `flush()` waits for the write buffer to drain unblocks it."""
+    """`abort()` while `flush()` waits for the write buffer to drain fails it."""
     transport, _, _ = pty_transport
     transport.write(b"x" * 200_000)
 
@@ -268,11 +270,67 @@ async def test_async_flush_abort(pty_transport: PtyTransport) -> None:
         await asyncio.sleep(0.05)
         assert not flush.done()
 
+        # The buffered data is discarded, so the flush did not succeed
         transport.abort()
-        await asyncio.wait_for(flush, 5)
+        with pytest.raises(ConnectionAbortedError):
+            await asyncio.wait_for(flush, 5)
+
+        await transport.wait_closed()
+
+        # Nothing is left to flush once closed
+        await asyncio.wait_for(transport.flush(), 5)
 
     # The background close owns the file descriptor, it must not be drained
     mock_tcdrain.assert_not_called()
+
+
+async def test_async_flush_graceful_close(pty_transport: PtyTransport) -> None:
+    """`flush()` pending during a graceful `close()` returns once the port is closed."""
+    transport, _, master = pty_transport
+    transport.write(b"x" * 200_000)
+
+    def slow_close(fd: int) -> None:
+        # Drivers wait for the output to drain when the port is closed
+        time.sleep(0.2)
+        _safe_close(fd)
+
+    with (
+        patch.object(transport._serial, "flush") as mock_tcdrain,
+        patch("serialx.descriptor_transport._safe_close", side_effect=slow_close),
+    ):
+        flush = asyncio.create_task(transport.flush())
+        await asyncio.sleep(0.05)
+        assert not flush.done()
+
+        transport.close()
+        await _drain_pty_until_empty(transport, master)
+
+        # The write buffer is empty but the port is still closing
+        await asyncio.sleep(0.05)
+        assert not flush.done()
+
+        await asyncio.wait_for(flush, 5)
+        assert transport._closed_waiter.done()
+
+    # The background close owns the file descriptor, it must not be drained
+    mock_tcdrain.assert_not_called()
+
+
+async def test_async_flush_cancelled(pty_transport: PtyTransport) -> None:
+    """Cancelled `flush()` calls do not leave their waiters behind."""
+    transport, _, master = pty_transport
+    transport.write(b"x" * 200_000)
+
+    for _ in range(10):
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(transport.flush(), 0.001)
+
+    assert not transport._empty_waiters
+
+    with patch.object(transport._serial, "flush"):
+        flush = asyncio.create_task(transport.flush())
+        await _drain_pty_until_empty(transport, master)
+        await asyncio.wait_for(flush, 5)
 
 
 async def test_async_flush_fatal_error(pty_transport: PtyTransport) -> None:
