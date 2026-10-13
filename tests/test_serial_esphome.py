@@ -1600,3 +1600,40 @@ async def test_no_serial_number_skips_the_check() -> None:
             pass
 
     assert len(api.serial_proxy_get_identity.mock_calls) == 0
+
+
+@contextlib.contextmanager
+def mock_api_client_on_thread_loop(
+    *port_names: str,
+) -> Iterator[tuple[MagicMock, asyncio.AbstractEventLoop]]:
+    """Yield a mock `APIClient` bound to a dedicated background thread's loop."""
+    thread_loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=thread_loop.run_forever, daemon=True)
+    thread.start()
+
+    async def _create() -> MagicMock:
+        return mock_api_client(*port_names)
+
+    try:
+        yield (
+            asyncio.run_coroutine_threadsafe(_create(), thread_loop).result(),
+            thread_loop,
+        )
+    finally:
+        thread_loop.call_soon_threadsafe(thread_loop.stop)
+        thread.join(timeout=5)
+        thread_loop.close()
+
+
+def test_sync_close_releases_port_of_external_api() -> None:
+    """Closing a sync serial on a shared client unsubscribes the port, nothing more."""
+    with mock_api_client_on_thread_loop("Zigbee") as (api, api_loop):
+        serial = ESPHomeSerial(api=api, port_name="Zigbee", baudrate=115200)
+        serial.open()
+        serial.close()
+
+        # Wait for what the close handed to the client's loop
+        asyncio.run_coroutine_threadsafe(asyncio.sleep(0), api_loop).result()
+
+    assert api.serial_proxy_unsubscribe.mock_calls == [call(0)]
+    assert len(api.disconnect.mock_calls) == 0

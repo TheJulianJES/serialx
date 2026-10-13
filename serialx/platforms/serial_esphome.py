@@ -1136,8 +1136,10 @@ class ESPHomeSerial(BaseSerial):
         """Close the serial port from a caller that already has a running loop."""
         self._unsubscribe_callbacks()
 
+        # An externally passed API stays connected, but the port is still released
+        self._unsubscribe_instance()
+
         if self._disconnect_api and self._api is not None:
-            self._unsubscribe_instance()
             await self._call_on_client_loop(self._api.disconnect())
             self._api = None
 
@@ -1145,8 +1147,10 @@ class ESPHomeSerial(BaseSerial):
         """Close the serial port."""
         self._unsubscribe_callbacks()
 
+        # An externally passed API stays connected, but the port is still released
+        self._unsubscribe_instance()
+
         if self._disconnect_api and self._api is not None:
-            self._unsubscribe_instance()
             self._call_on_loop(self._call_on_client_loop(self._api.disconnect()))
             self._api = None
 
