@@ -132,6 +132,20 @@ def test_termios_error_raised_as_os_error_bad_descriptor() -> None:
     assert raised.value.strerror is not None
 
 
+def test_inter_byte_timeout_none() -> None:
+    """`inter_byte_timeout=None`, pyserial's default, disables VTIME."""
+    master, slave = os.openpty()
+
+    try:
+        with PosixSerial(
+            os.ttyname(slave), baudrate=115200, inter_byte_timeout=None
+        ) as serial:
+            assert termios.tcgetattr(serial.fileno())[6][termios.VTIME] == 0
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [{"inter_byte_timeout": None}, {"inter_byte_timeout": 1.0}, {"min_read_size": 5}],

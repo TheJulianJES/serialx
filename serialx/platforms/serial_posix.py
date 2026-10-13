@@ -101,7 +101,7 @@ class PosixSerial(BaseSerial):
         self,
         *args: Any,
         fileno: int | None = None,
-        inter_byte_timeout: float = 0.01,
+        inter_byte_timeout: float | None = 0.01,
         min_read_size: int = 1,
         **kwargs: Any,
     ) -> None:
@@ -250,7 +250,7 @@ class PosixSerial(BaseSerial):
         # Only emit reads if VMIN characters have been read, after no more data comes in
         # for VTIME seconds
         vmin = self._min_read_size
-        vtime = int(self._inter_byte_timeout * 10)
+        vtime = int((self._inter_byte_timeout or 0) * 10)
 
         if not 0 <= vmin <= 255:
             raise ValueError(

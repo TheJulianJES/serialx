@@ -292,7 +292,7 @@ class _CommonConnectKwargs(TypedDict, total=False):
     bytesize: int | None
     writeTimeout: float | None
     do_not_open: bool | None
-    inter_byte_timeout: float
+    inter_byte_timeout: float | None
 
 
 class ConnectKwargs(  # type: ignore[call-arg]  # PEP 728 not in mypy yet

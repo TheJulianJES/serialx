@@ -541,6 +541,23 @@ async def test_async_read_with_timeout(serial_pair: SerialPair) -> None:
             await asyncio.wait_for(right.readexactly(1), timeout=0.1)
 
 
+@pytest.mark.parametrize("inter_byte_timeout", [None, 0, 0.1])
+async def test_async_inter_byte_timeout(
+    serial_pair: SerialPair, inter_byte_timeout: float | None
+) -> None:
+    """Test that any `inter_byte_timeout` is accepted and short reads still arrive."""
+    async with async_create_serial_pair(
+        serial_pair.left,
+        serial_pair.right,
+        baudrate=115200,
+        inter_byte_timeout=inter_byte_timeout,
+    ) as (left, right):
+        left.write_nowait(b"test")
+
+        result = await asyncio.wait_for(right.readexactly(4), timeout=1.0)
+        assert result == b"test"
+
+
 async def test_async_close_is_idempotent(serial_pair: SerialPair) -> None:
     """Test closing the serial port multiple times is safe."""
     async with async_create_serial_pair(

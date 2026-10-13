@@ -169,7 +169,7 @@ class Win32Serial(BaseSerial):
         self,
         *args: Any,
         handle: int | None = None,
-        inter_byte_timeout: float = 0.01,
+        inter_byte_timeout: float | None = 0.01,
         read_buffer_size: int = 4096,
         write_buffer_size: int = 4096,
         **kwargs: Any,
@@ -670,9 +670,8 @@ class Win32SerialTransport(BaseSerialTransport):
 
             # Ensure inter_byte_timeout is set to a small value to enable
             # "Wait for first byte, then return on gap" behavior for ReadFile.
-            # If 0 (default), ReadFile with default timeouts might wait for full buffer.
-            original_inter_byte_timeout = kwargs.get("inter_byte_timeout", 0)
-            if original_inter_byte_timeout == 0:
+            # If 0 or None, ReadFile with default timeouts might wait for full buffer.
+            if not kwargs.get("inter_byte_timeout"):
                 kwargs["inter_byte_timeout"] = 0.01
 
             self._serial = Win32Serial(
