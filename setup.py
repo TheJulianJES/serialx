@@ -1,11 +1,12 @@
 """Package setup configuration."""
 
-import sysconfig
+import sys
 
 import setuptools
 
 if __name__ == "__main__":
-    if sysconfig.get_platform().startswith(("win", "macosx-")):
+    # Keep in sync with the `setuptools-rust` marker in `build-system.requires`
+    if sys.platform in ("win32", "darwin"):
         from setuptools_rust import Binding, RustExtension
 
         setuptools.setup(
