@@ -490,6 +490,14 @@ class ESPHomeSerial(BaseSerial):
             return None
 
         if not identity.flags & SerialProxyIdentityFlag.CONNECTED:
+            # Subscribing to identities replays every port's, so opening a port with
+            # nothing plugged in ends up here before the port is even claimed
+            if not self._instance_subscribed:
+                return OSError(
+                    errno.ENXIO,
+                    f"No device is attached to serial proxy {self._port_name!r}",
+                )
+
             return OSError(
                 errno.ENXIO, f"Device removed from serial proxy {self._port_name!r}"
             )
@@ -1207,9 +1215,14 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         if not self._serial._api.is_connected:
             raise SerialException("ESPHome API connection closed while connecting")
 
-        await self._serial._async_configure_port()
+        # The device may have gone away while the port was being claimed, which is a
+        # better reason than anything the claim failed with because of it
+        try:
+            await self._serial._async_configure_port()
+        except Exception:
+            self._check_broken()
+            raise
 
-        # The device may have gone away while the port was being claimed
         self._check_broken()
 
         self._call_protocol_connection_made()
@@ -1286,7 +1299,11 @@ class ESPHomeSerialTransport(BaseSerialTransport):
             self._loop.call_soon_threadsafe(self._device_lost, exc)
 
     def _device_lost(self, exc: OSError) -> None:
-        """Tear down the transport after the device behind the port went away."""
+        """Tear down the transport after the device behind the port went away.
+
+        Before `connection_made`, only marks the transport broken so that `_connect`
+        fails with `exc`.
+        """
         if self._connection_lost_called or self._closing:
             return
 

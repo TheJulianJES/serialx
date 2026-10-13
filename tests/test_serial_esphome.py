@@ -1538,12 +1538,44 @@ async def test_device_removed_while_claiming_port(external_api: bool) -> None:
             )
 
     assert excinfo.value.errno == errno.ENXIO
+    # The device was never seen in the port, so it is not reported as removed
+    assert "No device is attached to serial proxy 'Zigbee'" in str(excinfo.value)
     assert events == []
 
     # The claim that was in flight is released, not left to refuse the next client
     await asyncio.sleep(0)
     assert api.serial_proxy_unsubscribe.mock_calls == [call(0)]
     assert len(api.disconnect.mock_calls) == (0 if external_api else 1)
+
+
+async def test_device_removed_while_configuring_port() -> None:
+    """A removal reported before a failed configure is what the open fails with."""
+    api = mock_api_client("Zigbee")
+
+    async def configure(**kwargs: object) -> SerialProxyRequestResponse:
+        for handler in _identity_handlers(api):
+            handler(_identity(flags=0, serial_number=""))
+
+        return SerialProxyRequestResponse(status=SerialProxyStatus.ERROR)  # type:ignore[call-arg]
+
+    api.serial_proxy_configure_await_response.side_effect = configure
+
+    with pytest.raises(OSError) as excinfo:
+        await create_serial_connection(
+            asyncio.get_running_loop(),
+            asyncio.Protocol,
+            url=None,
+            baudrate=115200,
+            transport_cls=ESPHomeSerialTransport,
+            api=api,
+            port_name="Zigbee",
+        )
+
+    assert excinfo.value.errno == errno.ENXIO
+    assert "Device removed from serial proxy 'Zigbee'" in str(excinfo.value)
+
+    await asyncio.sleep(0)
+    assert api.serial_proxy_unsubscribe.mock_calls == [call(0)]
 
 
 async def test_device_swapped_breaks_transport() -> None:
