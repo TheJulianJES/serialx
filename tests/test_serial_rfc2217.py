@@ -305,3 +305,46 @@ async def test_async_late_ack_not_attributed_to_next_command(
 
     transport.close()
     await transport.wait_closed()
+
+
+def test_sync_unsent_command_expects_no_ack(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """A command that failed to send doesn't take the next command's ack."""
+    with Serial.from_url(
+        fake_rfc2217_server.url,
+        baudrate=115200,
+        read_timeout=0.5,
+        connect_timeout=0.5,
+    ) as serial:
+        assert isinstance(serial, RFC2217Serial)
+
+        with pytest.raises(OverflowError):
+            serial._send_and_wait(SetBaudrateCmd(baudrate=-1))
+
+        ack = serial._send_and_wait(SetBaudrateCmd(baudrate=2400))
+        assert ack == SetBaudrateCmd(baudrate=2400)
+
+
+async def test_async_unsent_command_expects_no_ack(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """A command that failed to send doesn't take the next command's ack."""
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        asyncio.Protocol,
+        url=fake_rfc2217_server.url,
+        baudrate=115200,
+    )
+    assert isinstance(transport, RFC2217SerialTransport)
+
+    with pytest.raises(OverflowError):
+        await transport._send_and_wait(SetBaudrateCmd(baudrate=-1))
+
+    ack = await asyncio.wait_for(
+        transport._send_and_wait(SetBaudrateCmd(baudrate=2400)), 2
+    )
+    assert ack == SetBaudrateCmd(baudrate=2400)
+
+    transport.close()
+    await transport.wait_closed()

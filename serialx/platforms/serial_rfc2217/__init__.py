@@ -289,7 +289,7 @@ class Rfc2217:
         return None
 
     def expect_ack(self, cmd: Rfc2217Command) -> Rfc2217AckWaiter:
-        """Register a request that is about to be sent and will be acked."""
+        """Register a request that was just sent and will be acked."""
         waiter = Rfc2217AckWaiter(cmd=cmd)
         self._ack_waiters.setdefault(cmd.CMD_ID, deque()).append(waiter)
         return waiter
@@ -609,12 +609,12 @@ class RFC2217Serial(SocketSerial):
 
     def _send_and_wait(self, cmd: Rfc2217Command) -> Rfc2217Command:
         """Send a command and block until the matching server ack arrives."""
+        # Only expect an ack once the request is on the wire
+        self._send_command(cmd)
         waiter = self._engine.expect_ack(cmd)
+        LOGGER.debug("Waiting for %s ack...", type(cmd).__name__)
 
         try:
-            self._send_command(cmd)
-            LOGGER.debug("Waiting for %s ack...", type(cmd).__name__)
-
             while waiter.ack is None:
                 self._recv_and_process()
         finally:
@@ -922,13 +922,15 @@ class RFC2217SerialTransport(BaseSerialTransport):
     async def _send_and_wait(self, cmd: Rfc2217Command) -> Rfc2217Command:
         """Send a command and wait for the matching server ack."""
         assert self._serial is not None
+
+        # Only expect an ack once the request is on the wire
+        self._send_command(cmd)
         ack_waiter = self._serial._engine.expect_ack(cmd)
         waiter: asyncio.Future[Rfc2217Command] = self._loop.create_future()
         self._rfc2217_waiters[ack_waiter] = waiter
+        LOGGER.debug("Waiting for %s ack...", type(cmd).__name__)
 
         try:
-            self._send_command(cmd)
-            LOGGER.debug("Waiting for %s ack...", type(cmd).__name__)
             result = await waiter
         finally:
             self._rfc2217_waiters.pop(ack_waiter, None)
