@@ -163,25 +163,35 @@ def freebsd_list_serial_ports() -> list[SerialPortInfo]:
             _UsbStrings(None, None, None),
         )
 
-        device = f"/dev/cua{ttyname}"
+        # Devices with multiple ports (e.g. `u3g`, `umcs7840`) share one `ttyname`, their
+        # TTYs are named `U<unit>.<port>` instead of `U<unit>`
+        ttyports = int(sysctl.get(f"{parent}.ttyports", "1"))
+
+        if ttyports > 1:
+            ttynames = [f"{ttyname}.{port}" for port in range(ttyports)]
+        else:
+            ttynames = [ttyname]
+
         vid_str = pnpinfo.get("vendor")
         pid_str = pnpinfo.get("product")
         release_str = pnpinfo.get("release")
 
-        results.append(
-            SerialPortInfo(
-                device=device,
-                resolved_device=device,
-                vid=int(vid_str, 16) if vid_str else None,
-                pid=int(pid_str, 16) if pid_str else None,
-                serial_number=pnpinfo.get("sernum"),
-                manufacturer=usb.manufacturer,
-                product=usb.product,
-                bcd_device=int(release_str, 16) if release_str else None,
-                interface_description=usb.interface_description,
-                interface_num=interface_num,
+        for name in ttynames:
+            device = f"/dev/cua{name}"
+            results.append(
+                SerialPortInfo(
+                    device=device,
+                    resolved_device=device,
+                    vid=int(vid_str, 16) if vid_str else None,
+                    pid=int(pid_str, 16) if pid_str else None,
+                    serial_number=pnpinfo.get("sernum"),
+                    manufacturer=usb.manufacturer,
+                    product=usb.product,
+                    bcd_device=int(release_str, 16) if release_str else None,
+                    interface_description=usb.interface_description,
+                    interface_num=interface_num,
+                )
             )
-        )
 
     return results
 

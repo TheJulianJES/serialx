@@ -1,0 +1,16 @@
+dev.umcs7840.0.ttyports=4
+dev.umcs7840.0.ttyname=U0
+dev.umcs7840.0.%iommu=
+dev.umcs7840.0.%parent=uhub3
+dev.umcs7840.0.%pnpinfo=vendor=0x9710 product=0x7840 devclass=0xff devsubclass=0x00 devproto=0xff sernum="MC4P00123" release=0x0001 mode=host intclass=0xff intsubclass=0x00 intprotocol=0x00 ttyname=U0 ttyports=4
+dev.umcs7840.0.%location=bus=8 hubaddr=1 port=2 devaddr=2 interface=0 ugen=ugen8.2
+dev.umcs7840.0.%driver=umcs7840
+dev.umcs7840.0.%desc=MosChip Semiconductor MCS7840 USB 2.0 to Serial, class 255/0, rev 2.00/0.01, addr 1
+dev.umcs7840.%parent=
+dev.uhub.3.%iommu=
+dev.uhub.3.%parent=usbus8
+dev.uhub.3.%pnpinfo=
+dev.uhub.3.%location=
+dev.uhub.3.%driver=uhub
+dev.uhub.3.%desc=0x1b36 XHCI root HUB, class 9/0, rev 3.00/1.00, addr 1
+dev.uhub.%parent=

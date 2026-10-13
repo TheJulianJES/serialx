@@ -166,3 +166,48 @@ async def test_freebsd_list_serial_ports_no_devices() -> None:
         ports_async = await async_freebsd_list_serial_ports()
 
     assert ports_sync == ports_async == []
+
+
+async def test_freebsd_list_serial_ports_multiport() -> None:
+    """Test that every port of a multi-port device is listed as `cuaU<unit>.<port>`."""
+    # Synthesized from the FreeBSD `umcs7840` driver: one MCS7840 with four ports
+    sysctl_output = (DATA_DIR / "sysctl_dev_umcs7840.txt").read_text()
+    usbconfig_output = (DATA_DIR / "usbconfig_dump_all_desc_umcs7840.txt").read_text()
+
+    def mock_run(args, **kwargs):
+        class Result:
+            def __init__(self, stdout):
+                self.stdout = stdout
+                self.returncode = 0
+
+        if args[:3] == ["sysctl", "-e", "dev"]:
+            return Result(sysctl_output)
+
+        if args[:2] == ["usbconfig", "dump_all_desc"]:
+            return Result(usbconfig_output)
+
+        raise ValueError(f"Unexpected command: {args}")
+
+    with patch("subprocess.run", side_effect=mock_run):
+        ports_sync = freebsd_list_serial_ports()
+        ports_async = await async_freebsd_list_serial_ports()
+
+    assert (
+        ports_sync
+        == ports_async
+        == [
+            SerialPortInfo(
+                device=f"/dev/cuaU0.{port}",
+                resolved_device=f"/dev/cuaU0.{port}",
+                vid=0x9710,
+                pid=0x7840,
+                serial_number="MC4P00123",
+                manufacturer="MosChip Semiconductor",
+                product="MCS7840 USB 2.0 to Serial",
+                bcd_device=0x0001,
+                interface_description=None,
+                interface_num=0,
+            )
+            for port in range(4)
+        ]
+    )
