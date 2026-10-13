@@ -13,6 +13,8 @@ import pytest
 
 from serialx import (
     Platform,
+    StopBits,
+    UnsupportedSetting,
     async_list_serial_ports,
     get_serial_classes,
     list_serial_ports,
@@ -199,6 +201,48 @@ class _StubSerial(BaseSerial):
 
     @property
     def num_unwritten_bytes(self) -> int: ...  # type:ignore[empty-body, override]
+
+
+class _RejectingSerial(_StubSerial):
+    """Open stub that, like POSIX, rebuilds the whole config and rejects 1.5 stop bits."""
+
+    @property
+    def is_open(self) -> bool:
+        return True
+
+    def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
+        if self._stopbits is StopBits.ONE_POINT_FIVE:
+            raise UnsupportedSetting("1.5 stop bits not supported")
+
+
+def test_reconfigure_port_failure_keeps_settings() -> None:
+    """A rejected setting is not stored, so it can't break later reconfigures."""
+    serial = _RejectingSerial("/dev/null", baudrate=9600)
+
+    with pytest.raises(UnsupportedSetting):
+        serial.reconfigure_port(baudrate=115200, stopbits=StopBits.ONE_POINT_FIVE)
+
+    assert serial.baudrate == 9600
+    assert serial.stopbits is StopBits.ONE
+
+    serial.reconfigure_port(baudrate=115200)
+    assert serial.baudrate == 115200
+
+
+def test_deprecated_setter_failure_keeps_settings() -> None:
+    """A rejected deprecated property setter does not store the value either."""
+    serial = _RejectingSerial("/dev/null", baudrate=9600)
+
+    with (
+        pytest.warns(DeprecationWarning, match="stop_bits"),
+        pytest.raises(UnsupportedSetting),
+    ):
+        serial.stop_bits = 1.5
+
+    assert serial.stopbits is StopBits.ONE
+
+    serial.reconfigure_port(baudrate=115200)
+    assert serial.baudrate == 115200
 
 
 def test_check_broken_raises_fresh_instance() -> None:

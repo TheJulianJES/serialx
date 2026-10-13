@@ -1,8 +1,16 @@
 """Tests for the AsyncSerial API."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
-from serialx import Parity, SerialException, StopBits, async_serial_for_url
+from serialx import (
+    Parity,
+    SerialException,
+    StopBits,
+    UnsupportedSetting,
+    async_serial_for_url,
+)
 from tests.common import SerialPair, async_create_serial_pair
 
 
@@ -147,3 +155,20 @@ async def test_reconfigure_port(serial_pair: SerialPair) -> None:
 
         await left.write(b"hello")
         assert await right.readexactly(5) == b"hello"
+
+
+async def test_reconfigure_port_failure_keeps_settings(serial_pair: SerialPair) -> None:
+    """A rejected `reconfigure_port` leaves the stored settings unchanged."""
+    async with async_serial_for_url(serial_pair.left, baudrate=115200) as serial:
+        with (
+            patch.object(
+                serial.transport,
+                "_reconfigure_port",
+                AsyncMock(side_effect=UnsupportedSetting("rejected")),
+            ),
+            pytest.raises(UnsupportedSetting),
+        ):
+            await serial.reconfigure_port(baudrate=9600, stopbits=StopBits.TWO)
+
+        assert serial.baudrate == 115200
+        assert serial.stopbits is StopBits.ONE

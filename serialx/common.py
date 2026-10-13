@@ -680,6 +680,19 @@ class BaseSerial(io.RawIOBase):
         if update.dsrdtr is not None:
             self._dsrdtr = update.dsrdtr
 
+    @contextmanager
+    def _settings_update(self, update: PortSettingsUpdate) -> Iterator[None]:
+        """Store the update as current settings, restoring the old ones on failure."""
+        previous = self._all_settings()
+        self._store_settings_update(update)
+
+        try:
+            yield
+        except BaseException:
+            # Otherwise every later reconfigure would retry the rejected setting
+            self._store_settings_update(previous)
+            raise
+
     def _set_deprecated(
         self, name: str, kwarg: str, update: PortSettingsUpdate
     ) -> None:
@@ -698,10 +711,9 @@ class BaseSerial(io.RawIOBase):
                 stacklevel=3,
             )
 
-        self._store_settings_update(update)
-
-        if self.is_open:
-            self._reconfigure_port(update)
+        with self._settings_update(update):
+            if self.is_open:
+                self._reconfigure_port(update)
 
     @maybe_wrap_exceptions
     def reconfigure_port(
@@ -730,8 +742,8 @@ class BaseSerial(io.RawIOBase):
             rtscts=rtscts,
             dsrdtr=dsrdtr,
         )
-        self._store_settings_update(update)
-        self._reconfigure_port(update)
+        with self._settings_update(update):
+            self._reconfigure_port(update)
 
     @abstractmethod
     def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
@@ -1514,8 +1526,8 @@ class BaseSerialTransport(asyncio.Transport):
             rtscts=rtscts,
             dsrdtr=dsrdtr,
         )
-        self._serial._store_settings_update(update)
-        await self._reconfigure_port(update)
+        with self._serial._settings_update(update):
+            await self._reconfigure_port(update)
 
     @abstractmethod
     async def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
