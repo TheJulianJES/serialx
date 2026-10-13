@@ -57,6 +57,10 @@ MODEM_BIT_MAPPING = {
 }
 assert MODEM_BIT_MAPPING.keys() == ModemPins.__annotations__.keys()
 
+# Devices without modem control lines (e.g. ptys) reject the `TIOCM*` ioctls with
+# `ENOTTY`, or `EINVAL` on some older kernels. pyserial ignores both on open too.
+MODEM_PINS_UNSUPPORTED_ERRNOS = (errno.ENOTTY, errno.EINVAL)
+
 
 class TcsetattrFlags(NamedTuple):
     """Flags for `termios.tcsetattr`."""
@@ -336,9 +340,11 @@ class PosixSerial(BaseSerial):
         try:
             fcntl.ioctl(self._fileno, termios.TIOCMGET, buffer)
         except OSError as exc:
-            if exc.errno == errno.ENOTTY:
+            if exc.errno in MODEM_PINS_UNSUPPORTED_ERRNOS:
                 LOGGER.debug("Device is not a serial port, cannot get modem pins")
                 return ModemPins()
+
+            raise
 
         n = buffer[0]
         return ModemPins(
@@ -380,8 +386,10 @@ class PosixSerial(BaseSerial):
                         self._fileno, termios.TIOCMBIC, array.array("i", [to_clear])
                     )
         except OSError as exc:
-            if exc.errno == errno.ENOTTY:
+            if exc.errno in MODEM_PINS_UNSUPPORTED_ERRNOS:
                 LOGGER.debug("Device is not a serial port, cannot set modem pins")
+            else:
+                raise
 
     def _flush(self) -> None:
         """Flush write buffers, waiting until all data is written."""

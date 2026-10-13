@@ -56,6 +56,8 @@ class DarwinSerial(ExtendedPosixSerial):
         except OSError as exc:
             if exc.errno == errno.ENOTTY:
                 LOGGER.debug("Device is not a serial port, cannot set baudrate")
+            else:
+                raise
 
     def _after_configure_port(self) -> None:  # noqa: C901
         if self._has_non_posix_baudrate:

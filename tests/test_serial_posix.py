@@ -9,11 +9,13 @@ if sys.platform in ("win32", "emscripten"):
 
 import array
 import errno
+import os
 import termios
 from typing import Any
 from unittest.mock import patch
 
 from serialx import ModemPins, PinState
+from serialx.platforms.serial_darwin import IOSSIOSPEED, DarwinSerial
 from serialx.platforms.serial_posix import PosixSerial
 
 
@@ -115,6 +117,85 @@ def test_partial_set_modem_pins_uses_native_int_ioctl_buffer() -> None:
         serial.set_modem_pins(dtr=True, rts=False)
 
     assert seen_requests == [termios.TIOCMBIS, termios.TIOCMBIC]
+
+
+@pytest.mark.parametrize("err", [errno.ENOTTY, errno.EINVAL])
+def test_modem_pins_unsupported_ignored(err: int) -> None:
+    """Devices without modem control lines report no modem pins."""
+
+    def ioctl(fd: int, request: int, arg: Any = 0, mutate_flag: bool = True) -> int:
+        raise OSError(err, os.strerror(err))
+
+    serial = PosixSerial(fileno=1)
+    with patch("serialx.platforms.serial_posix.fcntl.ioctl", side_effect=ioctl):
+        serial.set_modem_pins(dtr=True, rts=False)
+        assert serial._get_modem_pins() == ModemPins()
+
+
+def test_get_modem_pins_raises_other_errors() -> None:
+    """Errors other than "unsupported", e.g. after an unplug, are not swallowed."""
+
+    def ioctl(fd: int, request: int, arg: Any = 0, mutate_flag: bool = True) -> int:
+        raise OSError(errno.EIO, "Input/output error")
+
+    serial = PosixSerial(fileno=1)
+    with patch("serialx.platforms.serial_posix.fcntl.ioctl", side_effect=ioctl):
+        with pytest.raises(OSError) as raised:
+            serial.get_modem_pins()
+
+    assert raised.value.errno == errno.EIO
+
+
+@pytest.mark.parametrize(
+    "modem_pins",
+    [
+        # TIOCMBIS/TIOCMBIC
+        ModemPins(dtr=PinState.HIGH, rts=PinState.LOW),
+        # TIOCMSET
+        ModemPins(**dict.fromkeys(ModemPins.__annotations__, PinState.LOW)),
+    ],
+)
+def test_set_modem_pins_raises_other_errors(modem_pins: ModemPins) -> None:
+    """Errors other than "unsupported", e.g. after an unplug, are not swallowed."""
+
+    def ioctl(fd: int, request: int, arg: Any = 0, mutate_flag: bool = True) -> int:
+        raise OSError(errno.EIO, "Input/output error")
+
+    serial = PosixSerial(fileno=1)
+    with patch("serialx.platforms.serial_posix.fcntl.ioctl", side_effect=ioctl):
+        with pytest.raises(OSError) as raised:
+            serial.set_modem_pins(modem_pins)
+
+    assert raised.value.errno == errno.EIO
+
+    # The failed write is not recorded as the current state
+    assert serial._dtr_state is PinState.UNDEFINED
+
+
+def test_darwin_non_posix_baudrate_rejected_raises() -> None:
+    """A driver rejecting a custom baudrate fails instead of keeping the fallback."""
+
+    def ioctl(fd: int, request: int, arg: Any = 0, mutate_flag: bool = True) -> int:
+        assert request == IOSSIOSPEED
+        raise OSError(errno.EINVAL, "Invalid argument")
+
+    serial = DarwinSerial(fileno=1, baudrate=3_000_000)
+    with patch("serialx.platforms.serial_darwin.fcntl.ioctl", side_effect=ioctl):
+        with pytest.raises(OSError) as raised:
+            serial._set_non_posix_baudrate(3_000_000)
+
+    assert raised.value.errno == errno.EINVAL
+
+
+def test_darwin_non_posix_baudrate_not_a_tty_ignored() -> None:
+    """Custom baudrates are ignored on devices that are not serial ports."""
+
+    def ioctl(fd: int, request: int, arg: Any = 0, mutate_flag: bool = True) -> int:
+        raise OSError(errno.ENOTTY, "Inappropriate ioctl for device")
+
+    serial = DarwinSerial(fileno=1, baudrate=3_000_000)
+    with patch("serialx.platforms.serial_darwin.fcntl.ioctl", side_effect=ioctl):
+        serial._set_non_posix_baudrate(3_000_000)
 
 
 def test_termios_error_raised_as_os_error_bad_descriptor() -> None:
