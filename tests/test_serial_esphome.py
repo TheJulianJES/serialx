@@ -22,6 +22,7 @@ import warnings
 
 from aioesphomeapi.model import (
     APIVersion,
+    ConnectionClosedEvent,
     DeviceInfo,
     SerialProxyDataReceived,
     SerialProxyIdentity,
@@ -963,6 +964,29 @@ async def test_transport_serial_is_open() -> None:
     transport.close()
     await transport.wait_closed()
 
+    assert not serial.is_open
+
+
+async def test_transport_serial_closed_after_api_connection_lost() -> None:
+    """A transport torn down by a dropped API connection leaves its serial closed."""
+    api = mock_api_client("Zigbee")
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        asyncio.Protocol,
+        url=None,
+        transport_cls=ESPHomeSerialTransport,
+        api=api,
+        port_name="Zigbee",
+        baudrate=115200,
+    )
+    serial = transport.get_extra_info("serial")
+    assert serial.is_open
+
+    # The API client notifies every registered close callback
+    for registration in api.add_connection_closed_callback.call_args_list:
+        registration.args[0](ConnectionClosedEvent(error=OSError("connection lost")))
+
+    await transport.wait_closed()
     assert not serial.is_open
 
 

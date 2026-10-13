@@ -1247,6 +1247,13 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         else:
             self._loop.call_soon_threadsafe(self._api_connection_lost, event)
 
+    def _call_protocol_connection_lost(self, exc: Exception | None) -> None:
+        # Not every teardown closes the serial, e.g. when the API connection dropped
+        if self._serial is not None:
+            self._serial._opened = False
+
+        super()._call_protocol_connection_lost(exc)
+
     def _api_connection_lost(self, event: ConnectionClosedEvent) -> None:
         """Tear down the transport after the API connection closed."""
         if self._connection_lost_called:
