@@ -6,6 +6,7 @@ import asyncio
 import functools
 import logging
 import os
+import threading
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from typing_extensions import Buffer, Unpack
@@ -183,14 +184,22 @@ class Win32Serial(BaseSerial):
         self._overlapped_read: PyOVERLAPPED | None = None
         self._overlapped_write: PyOVERLAPPED | None = None
         self._commtimeouts: CommTimeouts | None = None
+        self._commtimeouts_lock = threading.Lock()
 
     def _apply_commtimeouts(
         self,
         *,
         read_timeout: float | None = None,
         write_timeout: float | None = None,
+        update_read: bool = True,
+        update_write: bool = True,
     ) -> None:
-        """Encode and push timeouts to the kernel; skip the syscall if unchanged."""
+        """Encode and push timeouts to the kernel; skip the syscall if unchanged.
+
+        Reads and writes share one COMMTIMEOUTS per handle. A half that is not updated
+        keeps its current value, so a read does not reset the write timeout of a
+        concurrent write and vice versa.
+        """
         assert self._handle is not None
         interval = (
             max(int(self._inter_byte_timeout * 1000), 1)
@@ -222,11 +231,23 @@ class Win32Serial(BaseSerial):
             WriteTotalTimeoutConstant=write_total_timeout_constant,
         )
 
-        if self._commtimeouts == timeouts:
-            return
+        # Without the lock, a concurrent read and write could each push a stale copy of
+        # the other's half. It is not held across the I/O, which can block for long.
+        with self._commtimeouts_lock:
+            current = self._commtimeouts
 
-        SetCommTimeouts(self._handle, timeouts)
-        self._commtimeouts = timeouts
+            if current is not None:
+                if not update_read:
+                    timeouts = CommTimeouts(*current[:3], *timeouts[3:])
+
+                if not update_write:
+                    timeouts = CommTimeouts(*timeouts[:3], *current[3:])
+
+            if current == timeouts:
+                return
+
+            SetCommTimeouts(self._handle, timeouts)
+            self._commtimeouts = timeouts
 
     def _open(self) -> None:
         """Open the serial port."""
@@ -436,7 +457,7 @@ class Win32Serial(BaseSerial):
         assert self._overlapped_read is not None
         assert self._handle is not None
 
-        self._apply_commtimeouts(read_timeout=timeout)
+        self._apply_commtimeouts(read_timeout=timeout, update_write=False)
         ResetEvent(self._overlapped_read.hEvent)
 
         ReadFile(self._handle, b, self._overlapped_read)
@@ -448,7 +469,7 @@ class Win32Serial(BaseSerial):
         assert self._overlapped_write is not None
         assert self._handle is not None
 
-        self._apply_commtimeouts(write_timeout=timeout)
+        self._apply_commtimeouts(write_timeout=timeout, update_read=False)
         ResetEvent(self._overlapped_write.hEvent)
 
         err, _ = WriteFile(self._handle, data, self._overlapped_write)  # type:ignore[arg-type]
