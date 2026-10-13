@@ -283,6 +283,37 @@ async def test_compat_transport_port_setter_refused(serial_pair: SerialPair) -> 
         await transport.wait_closed()
 
 
+async def test_compat_transport_port_setter_refused_in_connection_made(
+    serial_pair: SerialPair,
+) -> None:
+    """The serial is already refused while the protocol is told about the transport."""
+    errors: list[Exception] = []
+
+    class Protocol(asyncio.Protocol):
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            serial = transport.get_extra_info("serial")
+
+            with pytest.warns(DeprecationWarning, match="`port`"):
+                try:
+                    serial.port = serial_pair.right
+                except SerialException as exc:
+                    errors.append(exc)
+
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        Protocol,
+        serial_pair.left,
+        baudrate=115200,
+    )
+
+    try:
+        assert len(errors) == 1
+        assert "transport" in str(errors[0])
+    finally:
+        transport.close()
+        await transport.wait_closed()
+
+
 def test_reconfigure_port_closed_raises() -> None:
     """Settings for a closed port belong in the constructor."""
     s = Serial()

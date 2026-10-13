@@ -1445,6 +1445,11 @@ class BaseSerialTransport(asyncio.Transport):
         assert not self._connection_made_called
 
         self._connection_made_called = True
+
+        # Before `connection_made`, which may already touch the serial
+        if self._serial is not None:
+            self._serial._owned_by_transport = True
+
         self._protocol.connection_made(self)
 
     def _call_protocol_connection_lost(self, exc: Exception | None) -> None:
@@ -1550,9 +1555,6 @@ class BaseSerialTransport(asyncio.Transport):
             await self.wait_closed()
 
             raise
-
-        if self._serial is not None:
-            self._serial._owned_by_transport = True
 
     async def get_modem_pins(self) -> ModemPins:
         """Get modem control bits."""
