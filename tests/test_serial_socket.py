@@ -1,6 +1,7 @@
 """Socket serial port tests."""
 
 import asyncio
+import socket
 import sys
 from typing import Any
 from unittest.mock import patch
@@ -40,6 +41,15 @@ def test_socket_effective_timeout_mismatched() -> None:
         with serial:
             assert serial._socket is not None
             assert serial._socket.gettimeout() == 1.0
+
+
+def test_socket_tcp_nodelay() -> None:
+    """Test that the sync socket disables Nagle's algorithm, like asyncio does."""
+    with create_socket_pair() as (left_url, _right_url, _, _):
+        with Serial.from_url(left_url, baudrate=115200) as serial:
+            assert isinstance(serial, SocketSerial)
+            assert serial._socket is not None
+            assert serial._socket.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY)
 
 
 def test_socket_invalid_uri() -> None:

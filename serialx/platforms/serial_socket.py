@@ -67,6 +67,9 @@ class SocketSerial(BaseSerial):
             (self._host, self._port), timeout=self._connect_timeout
         )
 
+        # Disable Nagle's algorithm, like asyncio does for its TCP transports
+        self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
     @property
     def is_open(self) -> bool:
         """Check if the serial port is open."""
