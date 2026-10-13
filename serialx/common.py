@@ -945,7 +945,7 @@ class BaseSerial(io.RawIOBase):
                 read = self.readinto(view, timeout=remaining_timeout)
 
             if remaining_timeout is not None:
-                remaining_timeout -= get_elapsed()
+                remaining_timeout = max(0.0, remaining_timeout - get_elapsed())
 
             view = view[read:]
             remaining -= read
@@ -975,7 +975,7 @@ class BaseSerial(io.RawIOBase):
                 byte = self.readexactly(1, timeout=remaining_timeout)
 
             if remaining_timeout is not None:
-                remaining_timeout -= get_elapsed()
+                remaining_timeout = max(0.0, remaining_timeout - get_elapsed())
 
             if not byte:
                 break

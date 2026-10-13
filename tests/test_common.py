@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from asyncio import IncompleteReadError
 from collections.abc import Generator
 import errno
 import logging
+import time
 import traceback
 from typing import Any
 from unittest.mock import Mock
@@ -199,6 +201,38 @@ class _StubSerial(BaseSerial):
 
     @property
     def num_unwritten_bytes(self) -> int: ...  # type:ignore[empty-body, override]
+
+
+class _SlowReadSerial(_StubSerial):
+    """Serves scripted chunks, each read overshooting the timeout it was given."""
+
+    def __init__(self, chunks: list[bytes], **kwargs: Any) -> None:
+        super().__init__("/dev/null", do_not_open=True, **kwargs)
+        self._chunks = chunks
+        self.timeouts: list[float | None] = []
+
+    def _readinto(self, b: Any, *, timeout: float | None) -> int:  # type:ignore[override]
+        self.timeouts.append(timeout)
+        assert timeout is not None
+        time.sleep(max(timeout, 0) + 0.01)
+
+        if not self._chunks:
+            return 0
+
+        chunk = self._chunks.pop(0)
+        memoryview(b)[: len(chunk)] = chunk
+        return len(chunk)
+
+
+def test_readexactly_remaining_timeout_never_negative() -> None:
+    """A read that overshoots the deadline leaves a zero, not negative, timeout."""
+    serial = _SlowReadSerial([b"a", b"b"], read_timeout=0.05)
+
+    with pytest.raises(IncompleteReadError) as exc_info:
+        serial.readexactly(3)
+
+    assert exc_info.value.partial == b"ab"
+    assert serial.timeouts == [0.05, 0.0, 0.0]
 
 
 def test_check_broken_raises_fresh_instance() -> None:
