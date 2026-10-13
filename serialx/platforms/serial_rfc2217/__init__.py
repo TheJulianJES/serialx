@@ -739,6 +739,7 @@ class RFC2217SerialTransport(BaseSerialTransport):
         # Data the device sent before the protocol was told about the transport, `None`
         # once it has all been delivered
         self._pending_data: list[bytes] | None = []
+        self._reading_paused = False
 
     # -- connection lifecycle -----------------------------------------------
 
@@ -788,10 +789,27 @@ class RFC2217SerialTransport(BaseSerialTransport):
                 break
 
             # Keep the rest for `resume_reading()` if the protocol paused reading
-            if self._tcp_transport is not None and not self._tcp_transport.is_reading():
+            if self._reading_paused:
                 return
 
-            self._protocol.data_received(self._pending_data.pop(0))
+            try:
+                self._protocol.data_received(self._pending_data.pop(0))
+            except Exception as exc:
+                # Fail the transport like asyncio does for a live `data_received()`
+                self._loop.call_exception_handler(
+                    {
+                        "message": "Fatal error: protocol.data_received() call failed.",
+                        "exception": exc,
+                        "transport": self,
+                        "protocol": self._protocol,
+                    }
+                )
+
+                if self._tcp_transport is not None:
+                    self._tcp_transport.abort()
+
+                self._tcp_connection_lost(exc)
+                break
 
         self._pending_data = None
 
@@ -1033,11 +1051,13 @@ class RFC2217SerialTransport(BaseSerialTransport):
         """Pause reading from the TCP transport."""
         assert self._tcp_transport is not None
         self._tcp_transport.pause_reading()
+        self._reading_paused = True
 
     def resume_reading(self) -> None:
         """Resume reading from the TCP transport."""
         assert self._tcp_transport is not None
         self._tcp_transport.resume_reading()
+        self._reading_paused = False
 
         if self._pending_data is not None:
             self._loop.call_soon(self._deliver_pending_data)

@@ -153,16 +153,15 @@ EARLY_DATA: dict[int, bytes] = {
 
 async def test_async_data_before_connection_made_honors_pause() -> None:
     """Buffered early data waits for `resume_reading()` if `connection_made` paused."""
-    events: list[str | bytes] = []
+    received = bytearray()
 
     class Protocol(asyncio.Protocol):
         def connection_made(self, transport: asyncio.BaseTransport) -> None:
             assert isinstance(transport, asyncio.ReadTransport)
             transport.pause_reading()
-            events.append("connection_made")
 
         def data_received(self, data: bytes) -> None:
-            events.append(data)
+            received.extend(data)
 
     with create_rfc2217_server(after_ack=EARLY_DATA) as server:
         transport, _ = await create_serial_connection(
@@ -171,14 +170,14 @@ async def test_async_data_before_connection_made_honors_pause() -> None:
 
         try:
             await asyncio.sleep(0.1)
-            assert events == ["connection_made"]
+            assert received == b""
 
             transport.resume_reading()
 
-            while len(events) < 3:
+            while len(received) < len(b"firstearly"):
                 await asyncio.sleep(0.01)
 
-            assert events == ["connection_made", b"first", b"early"]
+            assert received == b"firstearly"
         finally:
             transport.close()
             await transport.wait_closed()
@@ -209,6 +208,46 @@ async def test_async_data_before_connection_made_dropped_on_close(
         await transport.wait_closed()
 
     assert events == ["connection_made", "connection_lost"]
+
+
+@pytest.mark.parametrize("paused", [False, True])
+async def test_async_data_before_connection_made_protocol_error(paused: bool) -> None:
+    """A `data_received()` error while replaying early data fails the transport."""
+    loop = asyncio.get_running_loop()
+    lost: asyncio.Future[Exception | None] = loop.create_future()
+    errors: list[dict[str, object]] = []
+
+    class Protocol(asyncio.Protocol):
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            if paused:
+                assert isinstance(transport, asyncio.ReadTransport)
+                transport.pause_reading()
+
+        def data_received(self, data: bytes) -> None:
+            raise RuntimeError("protocol error")
+
+        def connection_lost(self, exc: Exception | None) -> None:
+            lost.set_result(exc)
+
+    old_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: errors.append(context))
+
+    try:
+        with create_rfc2217_server(after_ack=EARLY_DATA) as server:
+            transport, _ = await create_serial_connection(
+                loop, Protocol, url=server.url, baudrate=115200
+            )
+
+            if paused:
+                transport.resume_reading()
+
+            exc = await asyncio.wait_for(lost, timeout=2)
+            await transport.wait_closed()
+    finally:
+        loop.set_exception_handler(old_handler)
+
+    assert isinstance(exc, RuntimeError)
+    assert [context["exception"] for context in errors] == [exc]
 
 
 def test_sync_peer_close_during_negotiation_raises() -> None:
