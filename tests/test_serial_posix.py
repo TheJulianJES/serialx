@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import patch
 
 from serialx import ModemPins, PinState
+from serialx.platforms.serial_extended_posix import ExtendedPosixSerial
 from serialx.platforms.serial_posix import PosixSerial
 
 
@@ -127,3 +128,16 @@ def test_termios_error_raised_as_os_error_bad_descriptor() -> None:
 
     assert raised.value.errno is not None
     assert raised.value.strerror is not None
+
+
+@pytest.mark.parametrize("serial_cls", [PosixSerial, ExtendedPosixSerial])
+def test_xonxoff_does_not_set_ixany(serial_cls: type[PosixSerial]) -> None:
+    """Only XON restarts output after XOFF, not any received byte."""
+    iflag = serial_cls(xonxoff=True)._build_tcsetattr_flags().iflag
+
+    assert iflag & termios.IXON
+    assert iflag & termios.IXOFF
+    assert not iflag & termios.IXANY
+
+    iflag = serial_cls(xonxoff=False)._build_tcsetattr_flags().iflag
+    assert not iflag & (termios.IXON | termios.IXOFF | termios.IXANY)

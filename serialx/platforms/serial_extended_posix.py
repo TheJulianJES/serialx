@@ -26,7 +26,7 @@ class ExtendedPosixSerial(PosixSerial):
         cflag = 0x00000000
 
         if self._xonxoff:
-            iflag |= termios.IXON | termios.IXOFF | termios.IXANY
+            iflag |= termios.IXON | termios.IXOFF
 
         if self._rtscts:
             assert CRTSCTS is not None

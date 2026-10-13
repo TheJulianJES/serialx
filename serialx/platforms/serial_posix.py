@@ -185,7 +185,7 @@ class PosixSerial(BaseSerial):
         cflag = 0x00000000
 
         if self._xonxoff:
-            iflag |= termios.IXON | termios.IXOFF | termios.IXANY
+            iflag |= termios.IXON | termios.IXOFF
 
         if self._rtscts:
             raise UnsupportedSetting(
