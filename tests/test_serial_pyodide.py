@@ -137,7 +137,7 @@ class _SlowOpenPort:
         return getattr(self._port, name)
 
 
-@pytest.mark.parametrize("how", ["close", "cancel"])
+@pytest.mark.parametrize("how", ["close", "cancel", "cancel twice"])
 async def test_pyodide_close_while_opening(how: str) -> None:
     """A port that finishes opening after the transport was closed is closed again."""
     slow_port = _SlowOpenPort(js.create_fake_serial_pair()[0])
@@ -151,11 +151,17 @@ async def test_pyodide_close_while_opening(how: str) -> None:
         transport.close()
     else:
         connect_task.cancel()
+        if how == "cancel twice":
+            await asyncio.sleep(0.01)
+            connect_task.cancel()
     slow_port.opened.set()
 
     with pytest.raises((SerialException, asyncio.CancelledError)):
         await asyncio.wait_for(connect_task, 1)
     await asyncio.wait_for(transport.wait_closed(), 1)
+
+    # The port is closed again in the background once it has opened
+    await asyncio.sleep(0.1)
 
     # The JS port was closed again, so a new connection can open it
     _, writer = await asyncio.wait_for(

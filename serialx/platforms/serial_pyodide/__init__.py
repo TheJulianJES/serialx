@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 from typing import Any, final
 
@@ -77,6 +78,23 @@ _STOPBITS_MAP: dict[StopBits, JsStopBits] = {
     StopBits.ONE: 1,
     StopBits.TWO: 2,
 }
+
+
+async def _close_js_port(port: JsSerialPort) -> None:
+    try:
+        await port.close()
+    except Exception:
+        _LOGGER.warning("Failed to close serial port", exc_info=True)
+
+
+def _close_opened_port(port: JsSerialPort, opening: asyncio.Future[None]) -> None:
+    """Close a JS port whose pending `open()` was abandoned, once it has opened."""
+    if opening.cancelled() or opening.exception() is not None:
+        return
+
+    task = asyncio.ensure_future(_close_js_port(port))
+    _SERIAL_PORT_CLOSING_TASKS.add(task)
+    task.add_done_callback(_SERIAL_PORT_CLOSING_TASKS.discard)
 
 
 @final
@@ -242,7 +260,7 @@ class PyodideSerialTransport(BaseSerialTransport):
             )
 
         # `port.open()` cannot be cancelled, so if we are cancelled or closed while it
-        # is pending, wait for it to finish and close the port again
+        # is pending, close the port again once it has opened
         opening = asyncio.ensure_future(
             port.open(
                 baudRate=self._serial.baudrate,
@@ -256,9 +274,8 @@ class PyodideSerialTransport(BaseSerialTransport):
         try:
             await asyncio.shield(opening)
         except asyncio.CancelledError:
-            with contextlib.suppress(Exception):
-                await opening
-                await port.close()
+            # A callback, since we may be cancelled again while waiting for it
+            opening.add_done_callback(functools.partial(_close_opened_port, port))
             raise
 
         if self._closing:
