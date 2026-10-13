@@ -510,6 +510,7 @@ class Win32SerialTransport(BaseSerialTransport):
         self._connect_in_progress: bool = False
         self._connection_made_waiter: asyncio.Future[None] | None = None
         self._pending_connection_lost_exc: Exception | None = None
+        self._flush_lock = asyncio.Lock()
 
     def serial_close(self) -> None:
         """Release the handle off the event loop, then report connection lost."""
@@ -805,16 +806,18 @@ class Win32SerialTransport(BaseSerialTransport):
 
     async def _flush(self) -> None:
         """Flush write buffers, waiting until all data is written, internal."""
-        assert self._serial is not None
-        assert self._internal_transport is not None
-        try:
-            # Wait for asyncio buffer to drain
-            await self._internal_transport._make_empty_waiter()  # type:ignore[attr-defined]
+        # The proactor transport only supports a single empty waiter at a time
+        async with self._flush_lock:
+            assert self._serial is not None
+            assert self._internal_transport is not None
+            try:
+                # Wait for asyncio buffer to drain
+                await self._internal_transport._make_empty_waiter()  # type:ignore[attr-defined]
+            finally:
+                self._internal_transport._reset_empty_waiter()  # type:ignore[attr-defined]
 
             # Wait for hardware buffer to flush
             await self._loop.run_in_executor(None, self._serial.flush)
-        finally:
-            self._internal_transport._reset_empty_waiter()  # type:ignore[attr-defined]
 
     async def _get_modem_pins(self) -> ModemPins:
         """Get modem control bits, internal."""
