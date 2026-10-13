@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Iterator
 import sys
 import threading
+import time
 
 import pytest
 
@@ -200,7 +201,7 @@ def test_sync_commands_ignore_read_timeout(
             thread.join()
 
 
-@pytest.mark.parametrize("write_timeout", [None, 1.0])
+@pytest.mark.parametrize("write_timeout", [None, 0, 1.0])
 def test_sync_flush_waits_for_slow_ack(
     fake_rfc2217_server: FakeRfc2217Server, write_timeout: float | None
 ) -> None:
@@ -214,14 +215,25 @@ def test_sync_flush_waits_for_slow_ack(
         fake_rfc2217_server.hold_acks = True
         serial.write(b"data")
 
-        # The server only acks the flush once the device took the data
-        timer = threading.Timer(0.5, fake_rfc2217_server.release_acks)
-        timer.start()
+        def release_ack_later() -> None:
+            deadline = time.monotonic() + 5
+
+            while (
+                fake_rfc2217_server.num_held_acks == 0 and time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
+
+            # The server only acks the flush once the device took the data
+            time.sleep(0.5)
+            fake_rfc2217_server.release_acks()
+
+        thread = threading.Thread(target=release_ack_later, daemon=True)
+        thread.start()
 
         try:
             serial.flush()
         finally:
-            timer.join()
+            thread.join()
 
 
 def test_sync_flush_honors_write_timeout(

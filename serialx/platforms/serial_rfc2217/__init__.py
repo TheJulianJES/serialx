@@ -714,9 +714,12 @@ class RFC2217Serial(SocketSerial):
 
         # RFC2217 has no flush. Instead, we "flush" the pipe with a req/rsp sequence.
         # The server only acks once it has drained everything written before, which
-        # takes as long as the device needs, so wait like a blocking write would.
+        # takes as long as the device needs, so wait like a blocking write would. A
+        # non-blocking `write_timeout=0` can't apply to that, so like `tcdrain()` it
+        # then waits indefinitely.
         self._send_and_wait(
-            SetBaudrateCmd(baudrate=self._baudrate), timeout=self._write_timeout
+            SetBaudrateCmd(baudrate=self._baudrate),
+            timeout=self._write_timeout or None,
         )
 
 
