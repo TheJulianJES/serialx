@@ -1,6 +1,7 @@
 """RFC2217 serial port tests."""
 
 import asyncio
+from collections.abc import Callable, Iterator
 import sys
 
 import pytest
@@ -27,7 +28,25 @@ from serialx.platforms.serial_rfc2217.types import (
 )
 
 from .common import HUB4COM_BINARY, SerialBackend, SerialPair, create_hub4com_pair
+from .rfc2217_server import FakeRfc2217Server, create_rfc2217_server
 from .socket_relay import create_accept_then_close_server, create_silent_server
+
+
+@pytest.fixture
+def fake_rfc2217_server() -> Iterator[FakeRfc2217Server]:
+    """Fake RFC 2217 server for a single client."""
+    with create_rfc2217_server() as server:
+        yield server
+
+
+async def wait_until(condition: Callable[[], bool]) -> None:
+    """Wait until a condition becomes true."""
+
+    async def poll() -> None:
+        while not condition():
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(poll(), 2)
 
 
 def test_unknown_telnet_option() -> None:
@@ -157,3 +176,55 @@ async def test_async_negotiate_comport_rejected_by_hub4com(
                 baudrate=115200,
                 connect_timeout=1.0,
             )
+
+
+async def test_async_concurrent_same_type_commands(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """Concurrent commands of the same type each receive their own ack."""
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        asyncio.Protocol,
+        url=fake_rfc2217_server.url,
+        baudrate=115200,
+    )
+
+    fake_rfc2217_server.hold_acks = True
+    transport.write(b"data")
+
+    for commands in (
+        [transport.flush(), transport.flush()],
+        [transport.set_modem_pins(dtr=True), transport.set_modem_pins(rts=True)],
+    ):
+        tasks = asyncio.gather(*commands)
+        await wait_until(lambda: fake_rfc2217_server.num_held_acks == 2)
+
+        # Both acks arrive in a single TCP segment
+        fake_rfc2217_server.release_acks()
+        await asyncio.wait_for(tasks, 2)
+
+    transport.close()
+    await transport.wait_closed()
+
+
+async def test_async_connection_loss_fails_all_pending_commands(
+    fake_rfc2217_server: FakeRfc2217Server,
+) -> None:
+    """Every command waiting for an ack fails when the connection drops."""
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        asyncio.Protocol,
+        url=fake_rfc2217_server.url,
+        baudrate=115200,
+    )
+
+    fake_rfc2217_server.hold_acks = True
+    flushes = [asyncio.create_task(transport.flush()) for _ in range(2)]
+    await wait_until(lambda: fake_rfc2217_server.num_held_acks == 2)
+    fake_rfc2217_server.disconnect_client()
+
+    results = await asyncio.wait_for(
+        asyncio.gather(*flushes, return_exceptions=True), 2
+    )
+
+    assert all(isinstance(result, OSError) for result in results)

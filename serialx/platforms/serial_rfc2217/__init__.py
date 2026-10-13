@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Generator
 from contextlib import suppress
 import dataclasses
@@ -228,6 +229,14 @@ class TelnetParser:
         return cmd
 
 
+@dataclasses.dataclass(eq=False)
+class Rfc2217AckWaiter:
+    """An RFC2217 request awaiting its server ack."""
+
+    cmd: Rfc2217Command
+    ack: Rfc2217Command | None = None
+
+
 class Rfc2217:
     """IO-free RFC2217 protocol engine shared by sync and async wrappers."""
 
@@ -242,7 +251,7 @@ class Rfc2217:
         """Initialize parser state and protocol bookkeeping."""
         self._parser = TelnetParser()
         self._pending_telnet: list[TelnetCommand] = []
-        self._pending_rfc2217: dict[Rfc2217CmdId, Rfc2217Command] = {}
+        self._ack_waiters: dict[Rfc2217CmdId, deque[Rfc2217AckWaiter]] = {}
         self._modemstate = ModemStateFlag(0)
         self._negotiated = False
 
@@ -259,7 +268,7 @@ class Rfc2217:
         """Reset parser state and all protocol bookkeeping."""
         self._parser = TelnetParser()
         self._pending_telnet.clear()
-        self._pending_rfc2217.clear()
+        self._ack_waiters.clear()
         self._modemstate = ModemStateFlag(0)
         self._negotiated = False
 
@@ -278,9 +287,28 @@ class Rfc2217:
 
         return None
 
-    def pop_pending_rfc2217(self, cmd_id: Rfc2217CmdId) -> Rfc2217Command | None:
-        """Pop a pending RFC2217 command of the given type, if present."""
-        return self._pending_rfc2217.pop(cmd_id, None)
+    def expect_ack(self, cmd: Rfc2217Command) -> Rfc2217AckWaiter:
+        """Register a request that is about to be sent and will be acked."""
+        waiter = Rfc2217AckWaiter(cmd=cmd)
+        self._ack_waiters.setdefault(cmd.CMD_ID, deque()).append(waiter)
+        return waiter
+
+    def abandon_ack(self, waiter: Rfc2217AckWaiter) -> None:
+        """Stop waiting for the ack of a request."""
+        waiters = self._ack_waiters.get(waiter.cmd.CMD_ID)
+        if waiters is not None and waiter in waiters:
+            waiters.remove(waiter)
+
+    def _resolve_ack(self, ack: Rfc2217Command) -> None:
+        """Hand an ack to the oldest request of its type."""
+        # Servers process requests in order, so acks of one type arrive in the
+        # order their requests were sent
+        waiters = self._ack_waiters.get(ack.CMD_ID)
+        if not waiters:
+            LOGGER.debug("Ignoring unsolicited %r", ack)
+            return
+
+        waiters.popleft().ack = ack
 
     def build_port_config_commands(
         self, update: PortSettingsUpdate
@@ -398,7 +426,7 @@ class Rfc2217:
                     responses.append(do_rsp)
             elif isinstance(item, Rfc2217Command):
                 LOGGER.debug("RX rfc2217 cmd: %r", item)
-                self._pending_rfc2217[item.CMD_ID] = item
+                self._resolve_ack(item)
             else:
                 LOGGER.debug("RX telnet cmd: %r", item)
                 self._pending_telnet.append(item)
@@ -575,18 +603,19 @@ class RFC2217Serial(SocketSerial):
 
     def _send_and_wait(self, cmd: Rfc2217Command) -> Rfc2217Command:
         """Send a command and block until the matching server ack arrives."""
-        cmd_id = cmd.CMD_ID
-        self._send_command(cmd)
-        LOGGER.debug("Waiting for %s ack...", type(cmd).__name__)
+        waiter = self._engine.expect_ack(cmd)
 
-        while True:
-            pending = self._engine.pop_pending_rfc2217(cmd_id)
+        try:
+            self._send_command(cmd)
+            LOGGER.debug("Waiting for %s ack...", type(cmd).__name__)
 
-            if pending is not None:
-                LOGGER.debug("RX ack: %r", pending)
-                return pending
+            while waiter.ack is None:
+                self._recv_and_process()
+        finally:
+            self._engine.abandon_ack(waiter)
 
-            self._recv_and_process()
+        LOGGER.debug("RX ack: %r", waiter.ack)
+        return waiter.ack
 
     def num_unread_bytes(self) -> int:
         """Return the number of buffered serial data bytes waiting to be read."""
@@ -731,7 +760,9 @@ class RFC2217SerialTransport(BaseSerialTransport):
         self._telnet_waiters: list[
             tuple[list[TelnetCommand], asyncio.Future[TelnetCommand]]
         ] = []
-        self._rfc2217_waiters: dict[Rfc2217CmdId, asyncio.Future[Rfc2217Command]] = {}
+        self._rfc2217_waiters: dict[
+            Rfc2217AckWaiter, asyncio.Future[Rfc2217Command]
+        ] = {}
         self._tcp_transport: asyncio.Transport | None = None
         self._tcp_connection_lost_waiter: asyncio.Future[None] | None = None
         self._close_task: asyncio.Task[None] | None = None
@@ -884,22 +915,18 @@ class RFC2217SerialTransport(BaseSerialTransport):
 
     async def _send_and_wait(self, cmd: Rfc2217Command) -> Rfc2217Command:
         """Send a command and wait for the matching server ack."""
-        waiter: asyncio.Future[Rfc2217Command] = self._loop.create_future()
         assert self._serial is not None
-        pending = self._serial._engine.pop_pending_rfc2217(cmd.CMD_ID)
-        if pending is not None:
-            self._send_command(cmd)
-            LOGGER.debug("RX ack (already pending): %r", pending)
-            return pending
+        ack_waiter = self._serial._engine.expect_ack(cmd)
+        waiter: asyncio.Future[Rfc2217Command] = self._loop.create_future()
+        self._rfc2217_waiters[ack_waiter] = waiter
 
-        self._rfc2217_waiters[cmd.CMD_ID] = waiter
         try:
             self._send_command(cmd)
             LOGGER.debug("Waiting for %s ack...", type(cmd).__name__)
             result = await waiter
         finally:
-            if self._rfc2217_waiters.get(cmd.CMD_ID) is waiter:
-                self._rfc2217_waiters.pop(cmd.CMD_ID, None)
+            self._rfc2217_waiters.pop(ack_waiter, None)
+            self._serial._engine.abandon_ack(ack_waiter)
 
         LOGGER.debug("RX ack: %r", result)
         return result
@@ -946,15 +973,9 @@ class RFC2217SerialTransport(BaseSerialTransport):
 
         self._telnet_waiters = remaining
 
-        for rfc_cmd_id, rfc_waiter in list(self._rfc2217_waiters.items()):
-            if rfc_waiter.done():
-                self._rfc2217_waiters.pop(rfc_cmd_id, None)
-                continue
-
-            rfc_pending = self._serial._engine.pop_pending_rfc2217(rfc_cmd_id)
-            if rfc_pending is not None:
-                self._rfc2217_waiters.pop(rfc_cmd_id, None)
-                rfc_waiter.set_result(rfc_pending)
+        for ack_waiter, rfc_waiter in self._rfc2217_waiters.items():
+            if ack_waiter.ack is not None and not rfc_waiter.done():
+                rfc_waiter.set_result(ack_waiter.ack)
 
     # -- transport lifecycle ------------------------------------------------
 
