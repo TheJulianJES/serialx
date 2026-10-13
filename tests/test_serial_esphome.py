@@ -45,6 +45,7 @@ from serialx import (
     create_serial_connection,
     list_serial_ports,
     redact_uri,
+    serial_for_url,
 )
 from serialx.platforms.serial_esphome import (
     ESPHOME_DEFAULT_PORT,
@@ -1600,3 +1601,53 @@ async def test_no_serial_number_skips_the_check() -> None:
             pass
 
     assert len(api.serial_proxy_get_identity.mock_calls) == 0
+
+
+def test_sync_api_calls_client_on_its_loop() -> None:
+    """The sync API only touches the `APIClient` it created from that client's loop."""
+    apis: list[MagicMock] = []
+
+    def create_api(**kwargs: object) -> MagicMock:
+        # Created on the background loop, which the real client binds itself to
+        api = mock_api_client("Zigbee")
+        apis.append(api)
+        return api
+
+    calls: list[tuple[str, threading.Thread]] = []
+
+    def record(name: str) -> Callable[..., None]:
+        def side_effect(*args: object, **kwargs: object) -> None:
+            calls.append((name, threading.current_thread()))
+
+        return side_effect
+
+    with patch("serialx.platforms.serial_esphome.APIClient", side_effect=create_api):
+        serial = serial_for_url(
+            "esphome://127.0.0.1:6053/?port_name=Zigbee", baudrate=115200
+        )
+        serial.open()
+
+    assert isinstance(serial, ESPHomeSerial)
+    loop_thread = serial._loop_thread
+    assert loop_thread is not None
+
+    (api,) = apis
+    api.serial_proxy_write.side_effect = record("write")
+    api.serial_proxy_unsubscribe.side_effect = record("unsubscribe")
+    api.subscribe_serial_proxy_data.return_value.side_effect = record("data_unsub")
+    api.subscribe_serial_proxy_identity.return_value.side_effect = record(
+        "identity_unsub"
+    )
+    api.add_connection_closed_callback.return_value.side_effect = record("closed_unsub")
+
+    serial.write(b"hello")
+    serial.close()
+
+    assert calls == [
+        ("write", loop_thread),
+        ("data_unsub", loop_thread),
+        ("identity_unsub", loop_thread),
+        ("closed_unsub", loop_thread),
+        ("unsubscribe", loop_thread),
+    ]
+    assert len(api.disconnect.mock_calls) == 1

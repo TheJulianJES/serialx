@@ -425,7 +425,18 @@ class ESPHomeSerial(BaseSerial):
     ) -> None:
         """Invoke a synchronous `APIClient` method on the client's loop."""
         client_loop = self._client_loop
-        if client_loop is None or client_loop is self._loop:
+        if client_loop is None:
+            fn(*args, **kwargs)
+            return
+
+        # The sync API is called from the user's thread, not from `self._loop`, even
+        # when the client lives on it
+        try:
+            running_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is client_loop:
             fn(*args, **kwargs)
             return
 
@@ -940,13 +951,18 @@ class ESPHomeSerial(BaseSerial):
             return
 
         assert self._instance_id is not None
-        with suppress(APIConnectionError):
-            self._schedule_on_client_loop(
-                self._api.serial_proxy_unsubscribe, self._instance_id
-            )
+        self._schedule_on_client_loop(
+            self._send_unsubscribe, self._api, self._instance_id
+        )
 
         self._instance_subscribed = False
         self._active_mode = None
+
+    @staticmethod
+    def _send_unsubscribe(api: APIClient, instance: int) -> None:
+        """Release the port on the client's loop, unless the connection is gone."""
+        with suppress(APIConnectionError):
+            api.serial_proxy_unsubscribe(instance)
 
     def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         """Configure the serial port settings."""
