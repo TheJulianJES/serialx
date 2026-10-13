@@ -17,6 +17,9 @@ from .common import BaseSerialTransport, ConnectKwargs
 LOGGER = logging.getLogger(__name__)
 LOG_THRESHOLD_FOR_CONNLOST_WRITES = 5
 
+# The device went away (e.g. USB unplug), expected and not worth logging as an error
+DEVICE_GONE_ERRNOS = frozenset({errno.EIO, errno.ENXIO, errno.ENODEV})
+
 # Prevent tasks from being garbage collected.
 _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
@@ -396,7 +399,7 @@ class DescriptorTransport(BaseSerialTransport):
         LOGGER.debug("%r: %s", self, message, exc_info=True)
 
         # should be called by exception handler only
-        if not isinstance(exc, OSError) or exc.errno not in (errno.EIO, errno.ENXIO):
+        if not isinstance(exc, OSError) or exc.errno not in DEVICE_GONE_ERRNOS:
             self._loop.call_exception_handler(
                 {
                     "message": message,

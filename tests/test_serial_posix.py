@@ -8,12 +8,15 @@ if sys.platform in ("win32", "emscripten"):
     pytest.skip("POSIX-only tests", allow_module_level=True)
 
 import array
+import asyncio
+import contextlib
 import errno
+import os
 import termios
 from typing import Any
 from unittest.mock import patch
 
-from serialx import ModemPins, PinState
+from serialx import ModemPins, PinState, create_serial_connection
 from serialx.platforms.serial_posix import PosixSerial
 
 
@@ -127,3 +130,70 @@ def test_termios_error_raised_as_os_error_bad_descriptor() -> None:
 
     assert raised.value.errno is not None
     assert raised.value.strerror is not None
+
+
+class LostProtocol(asyncio.Protocol):
+    """Protocol that records connection loss."""
+
+    def __init__(self) -> None:
+        """Initialize the protocol."""
+        self.lost = asyncio.get_running_loop().create_future()
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        """Record connection loss."""
+        self.lost.set_result(exc)
+
+
+@pytest.mark.parametrize(
+    ("write_errno", "reported"),
+    [
+        pytest.param(errno.EIO, False, id="EIO"),
+        pytest.param(errno.ENXIO, False, id="ENXIO"),
+        pytest.param(errno.ENODEV, False, id="ENODEV"),
+        pytest.param(errno.EINVAL, True, id="EINVAL"),
+    ],
+)
+async def test_async_write_error_device_gone_not_reported(
+    write_errno: int, reported: bool
+) -> None:
+    """Write errors from a vanished device close the transport without an error log."""
+    loop = asyncio.get_running_loop()
+    loop_errors: list[dict[str, Any]] = []
+    loop.set_exception_handler(lambda _, ctx: loop_errors.append(ctx))
+
+    master, slave = os.openpty()
+    os.set_blocking(master, False)
+
+    try:
+        transport, protocol = await create_serial_connection(
+            loop, LostProtocol, os.ttyname(slave), 115200
+        )
+        assert isinstance(protocol, LostProtocol)
+
+        # Nothing reads the PTY master, so this stays in the write buffer
+        transport.write(b"x" * 200_000)
+        assert transport.get_write_buffer_size() > 0
+
+        # The device disappears while the buffer is being written out
+        with patch(
+            "serialx.descriptor_transport.os.write",
+            side_effect=OSError(write_errno, os.strerror(write_errno)),
+        ):
+            for _ in range(5000):
+                if protocol.lost.done():
+                    break
+                with contextlib.suppress(BlockingIOError):
+                    while os.read(master, 65536):
+                        pass
+                await asyncio.sleep(0.001)
+
+            exc = await asyncio.wait_for(protocol.lost, 5)
+
+        assert isinstance(exc, OSError)
+        assert exc.errno == write_errno
+        await asyncio.wait_for(transport.wait_closed(), 5)
+    finally:
+        os.close(slave)
+        os.close(master)
+
+    assert [ctx["exception"] for ctx in loop_errors] == ([exc] if reported else [])
